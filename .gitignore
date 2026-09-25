@@ -1,0 +1,7 @@
+# Build output
+/bin/
+*.exe
+
+# Editors
+.idea/
+.vscode/
