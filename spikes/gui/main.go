@@ -202,7 +202,10 @@ type sqlTab struct {
 	stack  *qt.QStackedWidget
 	pager  *pager.Pager
 	page   int
-	cancel context.CancelFunc
+	// cancel cancels the context of the current cursor; it lives as long as
+	// the pager, because later page fetches still use that context.
+	cancel  context.CancelFunc
+	running bool
 }
 
 func newSQLTab(initial string) *sqlTab {
@@ -243,6 +246,18 @@ func newSQLTab(initial string) *sqlTab {
 	split.SetSizes([]int{200, 400})
 	layout.AddWidget(split.QWidget)
 	return t
+}
+
+// closeCursor releases the current cursor, cancelling it if still running.
+func (t *sqlTab) closeCursor() {
+	if t.cancel != nil {
+		t.cancel()
+		t.cancel = nil
+	}
+	if t.pager != nil {
+		t.pager.Close()
+		t.pager = nil
+	}
 }
 
 // sqlToRun returns the selection if any, otherwise the whole editor content.
@@ -315,8 +330,8 @@ func (a *app) newScript(text string) {
 
 func (a *app) updateActions() {
 	t := a.current()
-	a.runAct.SetEnabled(t != nil && t.cancel == nil)
-	a.stopAct.SetEnabled(t != nil && t.cancel != nil)
+	a.runAct.SetEnabled(t != nil && !t.running)
+	a.stopAct.SetEnabled(t != nil && t.running)
 	a.updatePageLabel()
 }
 
@@ -335,19 +350,16 @@ func (a *app) updatePageLabel() {
 
 func (a *app) run() {
 	t := a.current()
-	if t == nil || t.cancel != nil {
+	if t == nil || t.running {
 		return
 	}
 	query := strings.TrimSpace(t.sqlToRun())
 	if query == "" {
 		return
 	}
-	if t.pager != nil {
-		t.pager.Close()
-		t.pager = nil
-	}
+	t.closeCursor()
 	ctx, cancel := context.WithCancel(context.Background())
-	t.cancel = cancel
+	t.cancel, t.running = cancel, true
 	a.updateActions()
 	a.status.SetText("Running…")
 	start := time.Now()
@@ -360,12 +372,13 @@ func (a *app) run() {
 		}
 		elapsed := time.Since(start)
 		mainthread.Wait(func() {
-			t.cancel = nil
-			cancel()
+			t.running = false
 			if err != nil {
 				if p != nil {
 					p.Close()
 				}
+				cancel()
+				t.cancel = nil
 				t.errors.SetPlainText(err.Error())
 				t.stack.SetCurrentIndex(1)
 				a.status.SetText(fmt.Sprintf("Query failed after %.3f s.", elapsed.Seconds()))
@@ -385,7 +398,7 @@ func (a *app) run() {
 }
 
 func (a *app) stop() {
-	if t := a.current(); t != nil && t.cancel != nil {
+	if t := a.current(); t != nil && t.running {
 		t.cancel()
 		a.status.SetText("Cancelling…")
 	}
@@ -394,13 +407,15 @@ func (a *app) stop() {
 // goPage moves to a page; n < 0 means last page. Fetching happens off the UI thread.
 func (a *app) goPage(n int) {
 	t := a.current()
-	if t == nil || t.pager == nil || t.cancel != nil {
+	if t == nil || t.pager == nil || t.running {
 		return
 	}
 	if n < 0 && t.page == 0 && !t.pager.Done() {
 		a.status.SetText("Fetching all rows…")
 	}
 	p := t.pager
+	t.running = true
+	a.updateActions()
 	go func() {
 		var err error
 		if n < 0 {
@@ -411,8 +426,12 @@ func (a *app) goPage(n int) {
 			rows, err = p.Page(max(n, 0))
 		}
 		mainthread.Wait(func() {
+			t.running = false
+			a.updateActions()
 			if err != nil {
 				a.status.SetText(err.Error())
+				t.closeCursor()
+				a.updatePageLabel()
 				return
 			}
 			if rows == nil { // past the end
@@ -449,7 +468,7 @@ func main() {
 	tb.SetMovable(false)
 	tb.SetToolButtonStyle(qt.ToolButtonTextUnderIcon)
 	tb.SetIconSize(qt.NewQSize2(32, 32))
-	a.win.AddToolBar(tb)
+	a.win.AddToolBarWithToolbar(tb)
 	addAct := func(icon qt.QStyle__StandardPixmap, text string, f func()) *qt.QAction {
 		act := qt.NewQAction3(stdIcon(icon), text)
 		act.OnTriggered(f)
@@ -492,12 +511,7 @@ func main() {
 		w := a.tabs.Widget(i)
 		key := uintptr(w.UnsafePointer())
 		if t := a.sqlTabs[key]; t != nil {
-			if t.cancel != nil {
-				t.cancel()
-			}
-			if t.pager != nil {
-				t.pager.Close()
-			}
+			t.closeCursor()
 			delete(a.sqlTabs, key)
 		}
 		a.tabs.RemoveTab(i)
@@ -546,7 +560,50 @@ func main() {
 		"ORDER BY id;")
 	a.updateActions()
 	a.win.Show()
+	if dir := os.Getenv("DIBI_SPIKE_SHOT"); dir != "" {
+		go a.autopilot(dir)
+	}
 	qt.QApplication_Exec()
+}
+
+// autopilot drives the UI and saves screenshots, for unattended checks.
+func (a *app) autopilot(dir string) {
+	shot := func(name string) {
+		time.Sleep(700 * time.Millisecond)
+		mainthread.Wait(func() {
+			a.win.Grab().Save(filepath.Join(dir, name+".png"))
+			fmt.Printf("%s: status=%q page=%q\n", name, a.status.Text(), a.pageLbl.Text())
+		})
+	}
+	shot("1-start")
+	mainthread.Wait(a.run)
+	shot("2-run")
+	mainthread.Wait(func() { a.goPage(1) })
+	shot("3-page2")
+	mainthread.Wait(func() {
+		a.newScript("SELECT * FROM events;")
+		a.run()
+	})
+	shot("4-full-table")
+	mainthread.Wait(func() { a.goPage(-1) })
+	shot("5-last-page")
+	mainthread.Wait(func() {
+		t := a.current()
+		t.table.SelectAll()
+		t.copySelection()
+		fmt.Printf("clipboard bytes after copying last page: %d\n", len(qt.QGuiApplication_Clipboard().Text()))
+		a.newScript("SELECT * FROM missing_table;")
+		a.run()
+	})
+	shot("6-error")
+	mainthread.Wait(func() {
+		a.newScript("SELECT count(*) FROM range(100000000) a, range(1000) b WHERE a.range % 997 = b.range;")
+		a.run()
+	})
+	time.Sleep(300 * time.Millisecond)
+	mainthread.Wait(a.stop)
+	shot("7-stopped")
+	mainthread.Wait(func() { qt.QCoreApplication_Quit() })
 }
 
 // prepareDemoData creates a 1M-row Parquet file and a DuckDB view over it.
