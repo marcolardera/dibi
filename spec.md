@@ -52,7 +52,7 @@ Qt is used under the LGPL v3. Since Dibi is open source (MIT), static linking is
 | OS      | Distribution                                                    |
 |---------|-----------------------------------------------------------------|
 | Linux   | Single binary linked against system Qt 6, and/or an AppImage    |
-| Windows | Single static `.exe` (miqt-docker `win64-cross-*-qt6-static`)   |
+| Windows | Single static `.exe`, built natively with MSYS2 UCRT64 (`qt6-static`) on a Windows CI runner |
 | macOS   | `.app` bundle                                                   |
 
 ### Spike results (see `spikes/`)
@@ -64,6 +64,9 @@ Qt is used under the LGPL v3. Since Dibi is open source (MIT), static linking is
   - The object tree must hide system-generated objects (e.g. `SYS_IL…$$` LOB indexes); index columns must be resolved through `ALL_IND_EXPRESSIONS` for function-based/hidden columns (`SYS_NC…$`).
   - Oracle errors include `error occur at position: N`, which can be used to place the cursor on the error in the editor.
   - `NUMBER` is scanned as a string, which preserves precision.
+- **Windows static cross-build** (miqt-docker `win64-cross-go1.26-qt6.5-static`): fails at link time. The prebuilt duckdb-go Windows library is built for the MinGW **UCRT** runtime with POSIX threads, while the miqt container's MinGW targets **MSVCRT** with Win32 threads (`undefined reference to __stdio_common_vswprintf`, `nanosleep`, …). Mixing the two runtimes is not safe.
+  - Chosen fix: build Windows releases natively in MSYS2 UCRT64 (`mingw-w64-ucrt-x86_64-qt6-static` 6.9, `mingw-w64-ucrt-x86_64-go`), where Qt, DuckDB and Go all use UCRT. To be validated on a Windows CI runner.
+  - Alternative: build DuckDB from source with the container's toolchain.
 
 ## High-level GUI idea
 
