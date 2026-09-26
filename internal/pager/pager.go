@@ -1,0 +1,168 @@
+// Package pager streams a result set one page at a time from an open cursor.
+//
+// The query is never rewritten with LIMIT/OFFSET: rows are read from the
+// cursor on demand and the pages already fetched are kept in memory.
+package pager
+
+import (
+	"context"
+	"database/sql"
+	"sync"
+	"sync/atomic"
+)
+
+// PageSize is the number of rows in a page.
+const PageSize = 1000
+
+// Queryer is implemented by *sql.DB, *sql.Conn and db.Session.
+type Queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// interrupter is implemented by queryers that stop a running query
+// server-side (db.Session for MySQL/MariaDB).
+type interrupter interface {
+	Interrupt()
+}
+
+// Pager keeps a cursor open and fetches one page at a time on demand.
+// Its methods are safe to call from any goroutine.
+type Pager struct {
+	Cols []*sql.ColumnType
+
+	cancel    context.CancelFunc
+	interrupt func()
+	finished  atomic.Bool // the cursor is exhausted or closed
+
+	mu    sync.Mutex
+	rows  *sql.Rows
+	pages [][][]any
+	done  bool
+}
+
+// New runs query and returns a pager positioned before the first row.
+//
+// The cursor lives in its own context, which must outlive the call: it is
+// cancelled by Cancel or Close. The parent ctx only bounds the lifetime.
+func New(ctx context.Context, q Queryer, query string) (*Pager, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	rows, err := q.QueryContext(ctx, query)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	cols, err := rows.ColumnTypes()
+	if err != nil {
+		rows.Close()
+		cancel()
+		return nil, err
+	}
+	p := &Pager{rows: rows, Cols: cols, cancel: cancel}
+	if in, ok := q.(interrupter); ok {
+		p.interrupt = in.Interrupt
+	}
+	return p, nil
+}
+
+// Page returns page n (0-based), fetching from the cursor as needed. It
+// returns nil rows if the result has fewer pages.
+func (p *Pager) Page(n int) ([][]any, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for len(p.pages) <= n && !p.done {
+		if err := p.fetchNext(); err != nil {
+			return nil, err
+		}
+	}
+	if n >= len(p.pages) {
+		return nil, nil
+	}
+	return p.pages[n], nil
+}
+
+// Last fetches all remaining rows and returns the index of the last page
+// (0 for an empty result).
+func (p *Pager) Last() (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for !p.done {
+		if err := p.fetchNext(); err != nil {
+			return 0, err
+		}
+	}
+	return max(len(p.pages)-1, 0), nil
+}
+
+func (p *Pager) fetchNext() error {
+	var page [][]any
+	for len(page) < PageSize {
+		if !p.rows.Next() {
+			p.setDone()
+			p.rows.Close()
+			if err := p.rows.Err(); err != nil {
+				return err
+			}
+			break
+		}
+		vals := make([]any, len(p.Cols))
+		ptrs := make([]any, len(p.Cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := p.rows.Scan(ptrs...); err != nil {
+			p.setDone()
+			p.rows.Close()
+			return err
+		}
+		page = append(page, vals)
+	}
+	if len(page) > 0 {
+		p.pages = append(p.pages, page)
+	}
+	return nil
+}
+
+// Done reports whether the cursor has been fully read.
+func (p *Pager) Done() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.done
+}
+
+// Pages returns the number of pages fetched so far.
+func (p *Pager) Pages() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.pages)
+}
+
+func (p *Pager) setDone() {
+	p.done = true
+	p.finished.Store(true)
+}
+
+// Cancel interrupts a fetch in progress. It may be called from any goroutine
+// and does not wait for the fetch to return.
+func (p *Pager) Cancel() {
+	p.stopServer()
+	p.cancel()
+}
+
+// stopServer interrupts the query server-side while the cursor is open, so
+// that closing it does not have to read the remaining rows.
+func (p *Pager) stopServer() {
+	if p.interrupt != nil && !p.finished.Load() {
+		p.interrupt()
+	}
+}
+
+// Close cancels the cursor and releases it. It waits for any fetch in
+// progress to return.
+func (p *Pager) Close() {
+	p.stopServer()
+	p.cancel()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rows.Close()
+	p.setDone()
+}
