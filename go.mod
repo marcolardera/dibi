@@ -1,9 +1,11 @@
 module dibi
 
-go 1.27.1
+go 1.26
 
 require (
 	github.com/duckdb/duckdb-go/v2 v2.10505.0
+	github.com/mappu/miqt v0.14.0
+	github.com/sijms/go-ora/v2 v2.9.0
 	modernc.org/sqlite v1.59.0
 )
 
@@ -22,12 +24,10 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.18.3 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
-	github.com/mappu/miqt v0.14.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.25 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/sijms/go-ora/v2 v2.9.0 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/mod v0.38.0 // indirect

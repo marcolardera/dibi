@@ -31,12 +31,13 @@ The tool must support running custom SQL queries in an editor (with syntax highl
 | Concern            | Choice                                                              |
 |--------------------|---------------------------------------------------------------------|
 | Language           | Go                                                                  |
-| GUI                | Qt 6 via [miqt](https://github.com/mappu/miqt) bindings, statically linked |
-| SQL editor widget  | QScintilla (via miqt)                                               |
+| License            | MIT                                                                 |
+| GUI                | Qt 6 via [miqt](https://github.com/mappu/miqt) bindings             |
+| SQL editor widget  | `QPlainTextEdit` + `QSyntaxHighlighter` (QScintilla is GPL: not used) |
 | PostgreSQL         | `github.com/jackc/pgx`                                              |
 | MySQL / MariaDB    | `github.com/go-sql-driver/mysql`                                    |
-| Oracle             | `github.com/sijms/go-ora` (pure Go, no Oracle Instant Client needed) |
-| SQLite             | `modernc.org/sqlite` or `github.com/mattn/go-sqlite3`               |
+| Oracle             | `github.com/sijms/go-ora/v2` (pure Go, no Oracle Instant Client needed) |
+| SQLite             | `modernc.org/sqlite` (pure Go)                                      |
 | DuckDB             | `github.com/duckdb/duckdb-go` (cgo, statically linked)              |
 | CSV / Parquet      | DuckDB (`read_csv_auto`, `read_parquet`)                            |
 | XLSX export        | `github.com/xuri/excelize` (streaming writer)                       |
@@ -44,16 +45,25 @@ The tool must support running custom SQL queries in an editor (with syntax highl
 
 All queries run in background goroutines and use `context.Context`, so the UI never freezes and queries can be cancelled.
 
-### Technical risks to validate first (spike)
+### Packaging and Qt licensing
 
-Before building the real application, a throwaway prototype must prove on all 3 OSes:
+Qt is used under the LGPL v3. Since Dibi is open source (MIT), static linking is acceptable as long as the distribution includes the Qt license texts and a pointer to the Qt source, and users can rebuild/relink Dibi from source.
 
-1. A static single binary including miqt/Qt 6 and duckdb-go builds and runs.
-2. A `QTableView` backed by a custom Go `QAbstractTableModel` scrolls smoothly over 1M rows.
-3. A QScintilla editor with SQL highlighting works through miqt.
-4. go-ora connects to an Oracle Free container and reads metadata.
+| OS      | Distribution                                                    |
+|---------|-----------------------------------------------------------------|
+| Linux   | Single binary linked against system Qt 6, and/or an AppImage    |
+| Windows | Single static `.exe` (miqt-docker `win64-cross-*-qt6-static`)   |
+| macOS   | `.app` bundle                                                   |
 
-Fallback if miqt proves insufficient: C++ with Qt 6 (same architecture, but Oracle would require Instant Client).
+### Spike results (see `spikes/`)
+
+- **Streaming pager** (`spikes/stream`, `spikes/pager`): first 1000-row page of a 1M-row file in ~13 ms (Parquet), ~100 ms (CSV), ~1 ms (SQLite); fetching all rows ~0.3–0.45 s. DuckDB honours cancellation in ~0.5 s.
+- **GUI** (`spikes/gui`): toolbar, tree, tabbed editor with highlighting, paged grid backed by a Go `QAbstractTableModel`, status-bar pagination, Run/Stop, copy. All work; the UI never blocks.
+  - Lesson: the query `context.Context` must live as long as the cursor (not just until the first page), otherwise later page fetches fail.
+- **Oracle** (`spikes/oracle`, Oracle 23ai Free): go-ora connects without Instant Client; DDL, PL/SQL blocks, `FETCH FIRST n ROWS ONLY`, `LONG` columns (view source), `ALL_SOURCE`, CLOB/BLOB/DATE/TIMESTAMP WITH TIME ZONE all work. Cancellation returns `ORA-01013` in ~0.5 s and the connection stays usable. 100k rows fetched in ~120 ms.
+  - The object tree must hide system-generated objects (e.g. `SYS_IL…$$` LOB indexes); index columns must be resolved through `ALL_IND_EXPRESSIONS` for function-based/hidden columns (`SYS_NC…$`).
+  - Oracle errors include `error occur at position: N`, which can be used to place the cursor on the error in the editor.
+  - `NUMBER` is scanned as a string, which preserves precision.
 
 ## High-level GUI idea
 
