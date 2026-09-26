@@ -239,6 +239,44 @@ func (s *Source) SplitDialect() sqlsplit.Dialect { return s.d.splitDialect() }
 // (sessions can then be bound to a database).
 func (s *Source) HasDatabases() bool { return s.d.hasDatabases() }
 
+// SwitchableDatabases reports whether a session can be bound to one of
+// several databases (Postgres, MySQL/MariaDB, DuckDB).
+func (s *Source) SwitchableDatabases() bool {
+	return s.d.hasDatabases() && s.Conn.Type != config.SQLite
+}
+
+// Databases lists the databases a session can be bound to, or nil.
+func (s *Source) Databases(ctx context.Context) ([]string, error) {
+	if !s.SwitchableDatabases() {
+		return nil, nil
+	}
+	pool, err := s.Pool("")
+	if err != nil {
+		return nil, err
+	}
+	return s.d.databases(ctx, pool)
+}
+
+// DefaultDatabase returns the database a new session uses when none is chosen.
+func (s *Source) DefaultDatabase(ctx context.Context) string {
+	if !s.SwitchableDatabases() {
+		return ""
+	}
+	if s.Conn.Database != "" {
+		return s.Conn.Database
+	}
+	pool, err := s.Pool("")
+	if err != nil {
+		return ""
+	}
+	q := "SELECT current_database()"
+	if s.Conn.Type == config.MySQL || s.Conn.Type == config.MariaDB {
+		q = "SELECT COALESCE(DATABASE(), '')"
+	}
+	name, _ := queryString(ctx, pool, q)
+	return name
+}
+
 // Pool returns the connection pool for a database ("" = the default one).
 func (s *Source) Pool(database string) (*sql.DB, error) {
 	if !s.d.separatePools() || database == s.Conn.Database {

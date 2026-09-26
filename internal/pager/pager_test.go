@@ -90,3 +90,30 @@ func TestCloseReleasesConnection(t *testing.T) {
 		t.Fatalf("connection not released: n=%d err=%v", n, err)
 	}
 }
+
+func TestCursorOutlivesContext(t *testing.T) {
+	db := openDB(t, 2500)
+	ctx, cancel := context.WithCancel(context.Background())
+	p, err := New(ctx, db, "SELECT id FROM t ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Page(0); err != nil {
+		t.Fatal(err)
+	}
+	cancel() // e.g. the run that created the pager has finished
+	page, err := p.Page(2)
+	if err != nil || len(page) != 500 {
+		t.Fatalf("page 2 after cancel: len=%d err=%v", len(page), err)
+	}
+}
+
+func TestCancelledBeforeStart(t *testing.T) {
+	db := openDB(t, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := New(ctx, db, "SELECT id FROM t"); err == nil {
+		t.Fatal("expected an error for a cancelled context")
+	}
+}

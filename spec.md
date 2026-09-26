@@ -230,6 +230,16 @@ Small application state (such as the last used connection) is stored in `dibi/st
 
 In v1, passwords are stored in **plaintext** in the connection YAML file. Moving them to the OS keychain is planned for a later version.
 
+## Implementation notes (v1)
+
+- **Sessions and Stop.** Each SQL editor tab has its own connection. Stop cancels the query server-side and keeps the session (temporary tables, settings, open transactions survive): Postgres sends a cancel request, MySQL/MariaDB run `KILL QUERY` from another connection, Oracle sends a break. A session that dies anyway is reopened on the next run.
+- **Scripts.** Statements are split per dialect: Postgres dollar quotes, MySQL `DELIMITER`, Oracle PL/SQL blocks (`BEGIN`/`DECLARE`, `CREATE PROCEDURE/FUNCTION/TRIGGER`) and the `/` line terminator, which is required after `CREATE PACKAGE` and `CREATE TYPE`. Statements run in order and execution stops at the first error. Since a session has a single cursor, only the last result set of a script can be paged; earlier ones show their first 1000 rows.
+- **Errors.** When the database reports the position of an error (Postgres, Oracle), the editor cursor moves there.
+- **Export from the info panel** exports the whole table or view, not only the 50-row preview.
+- **System objects are hidden**: Postgres `pg_*`/`information_schema` schemas, MySQL system databases, Oracle-maintained users, Oracle LOB indexes.
+- **File connections** refuse to open a missing file (a mistyped path does not create an empty database).
+- **Theme.** If the desktop theme is dark, Dibi switches to Qt's light Fusion palette.
+
 ## Out of scope for v1
 
 - Editing data in the grid

@@ -42,11 +42,18 @@ type Pager struct {
 
 // New runs query and returns a pager positioned before the first row.
 //
-// The cursor lives in its own context, which must outlive the call: it is
-// cancelled by Cancel or Close. The parent ctx only bounds the lifetime.
+// Cancelling ctx interrupts the query while New runs. Afterwards the cursor
+// is independent of ctx (it must outlive the call that created it: pages
+// are fetched later); use Cancel or Close to stop it.
 func New(ctx context.Context, q Queryer, query string) (*Pager, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	rows, err := q.QueryContext(ctx, query)
+	cctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	stop := context.AfterFunc(ctx, cancel)
+	rows, err := q.QueryContext(cctx, query)
+	if !stop() && err == nil {
+		// ctx was cancelled while the query started.
+		err = ctx.Err()
+		rows.Close()
+	}
 	if err != nil {
 		cancel()
 		return nil, err
