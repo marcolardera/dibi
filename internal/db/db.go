@@ -155,7 +155,20 @@ type Info struct {
 	Indexes     []Index
 	Properties  [][2]string
 	Source      string
-	Preview     string // SQL returning the first 50 rows, or ""
+	Preview     string // SQL returning the first PreviewRows rows, or ""
+	SelectAll   string // SQL returning all rows (used by export), or ""
+}
+
+// Row-limiting syntaxes for the data preview.
+const (
+	limitSyntax      = "LIMIT %d"
+	fetchFirstSyntax = "FETCH FIRST %d ROWS ONLY"
+)
+
+// setSelect sets the preview and select-all queries for a table or view.
+func (i *Info) setSelect(qualified, limit string) {
+	i.SelectAll = "SELECT * FROM " + qualified
+	i.Preview = i.SelectAll + " " + fmt.Sprintf(limit, PreviewRows)
 }
 
 // PreviewRows is the number of rows shown in the data preview.

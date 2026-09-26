@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"strings"
 	"time"
 
@@ -125,7 +124,7 @@ func (p postgres) info(ctx context.Context, db *sql.DB, n Node) (*Info, error) {
 		if info.Columns, err = p.columns(ctx, db, n); err != nil {
 			return nil, err
 		}
-		info.Preview = fmt.Sprintf("SELECT * FROM %s LIMIT %d", qualified, PreviewRows)
+		info.setSelect(qualified, limitSyntax)
 		switch n.Kind {
 		case KindTable:
 			if info.Constraints, err = p.constraints(ctx, db, n); err != nil {

@@ -98,7 +98,7 @@ func (o oracle) info(ctx context.Context, db *sql.DB, n Node) (*Info, error) {
 		if info.Columns, err = o.columns(ctx, db, n); err != nil {
 			return nil, err
 		}
-		info.Preview = fmt.Sprintf("SELECT * FROM %s FETCH FIRST %d ROWS ONLY", qualified, PreviewRows)
+		info.setSelect(qualified, fetchFirstSyntax)
 		switch n.Kind {
 		case KindTable:
 			if info.Constraints, err = o.constraints(ctx, db, n); err != nil {

@@ -81,7 +81,7 @@ func (s sqlite) info(ctx context.Context, db *sql.DB, n Node) (*Info, error) {
 		if info.Columns, err = s.columns(ctx, db, n); err != nil {
 			return nil, err
 		}
-		info.Preview = fmt.Sprintf("SELECT * FROM %s LIMIT %d", qualified, PreviewRows)
+		info.setSelect(qualified, limitSyntax)
 		if n.Kind == KindTable {
 			if info.Constraints, err = s.constraints(ctx, db, n, info.Columns); err != nil {
 				return nil, err

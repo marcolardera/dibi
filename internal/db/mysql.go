@@ -128,7 +128,7 @@ func (m mysqlDialect) info(ctx context.Context, db *sql.DB, n Node) (*Info, erro
 		if info.Columns, err = m.columns(ctx, db, n); err != nil {
 			return nil, err
 		}
-		info.Preview = fmt.Sprintf("SELECT * FROM %s LIMIT %d", qualified, PreviewRows)
+		info.setSelect(qualified, limitSyntax)
 		if n.Kind == KindTable {
 			if info.Constraints, err = m.constraints(ctx, db, n); err != nil {
 				return nil, err

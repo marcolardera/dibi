@@ -83,7 +83,7 @@ func (d duckdb) info(ctx context.Context, db *sql.DB, n Node) (*Info, error) {
 		if info.Columns, err = d.columns(ctx, db, n); err != nil {
 			return nil, err
 		}
-		info.Preview = fmt.Sprintf("SELECT * FROM %s LIMIT %d", qualified, PreviewRows)
+		info.setSelect(qualified, limitSyntax)
 		if n.Kind == KindTable {
 			if info.Constraints, err = d.constraints(ctx, db, n); err != nil {
 				return nil, err
@@ -199,7 +199,7 @@ func (f fileDialect) info(ctx context.Context, db *sql.DB, n Node) (*Info, error
 	}
 	info.Title = "File " + n.Name
 	info.Source = ""
-	info.Preview = fmt.Sprintf("SELECT * FROM %s LIMIT %d", quoteDouble(n.Object), PreviewRows)
+	info.setSelect(quoteDouble(n.Object), limitSyntax)
 	return info, nil
 }
 
