@@ -11,9 +11,15 @@
 //     PROCEDURE/FUNCTION/TRIGGER) and the SQL*Plus "/" line terminator,
 //     which is required for CREATE PACKAGE and CREATE TYPE.
 //   - SQLite/DuckDB (Generic): CREATE TRIGGER … BEGIN … END bodies.
+//   - SQL Server (MSSQL): the script is split into batches at "GO" lines,
+//     like sqlcmd and SSMS do, never at semicolons: variables live for a
+//     batch, and CREATE PROCEDURE/FUNCTION/TRIGGER/VIEW must start one.
+//     "GO n" repeats the batch n times. [bracketed] identifiers and nested
+//     /* */ comments are understood.
 package sqlsplit
 
 import (
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -26,6 +32,7 @@ const (
 	Postgres
 	MySQL
 	Oracle
+	MSSQL
 )
 
 // Statement is one statement of a script.
@@ -62,6 +69,9 @@ type splitter struct {
 // or comments) are dropped.
 func Split(src string, d Dialect) []Statement {
 	s := &splitter{src: src, d: d, delim: ";", start: -1}
+	if d == MSSQL {
+		s.delim = "" // batches end only at GO lines
+	}
 	s.run()
 	return s.out
 }
@@ -85,6 +95,18 @@ func (s *splitter) emit(end int) {
 	s.reset()
 }
 
+// emitRepeated ends the current statement at end and adds it count times
+// in total (SQL Server "GO count").
+func (s *splitter) emitRepeated(end, count int) {
+	n := len(s.out)
+	s.emit(end)
+	if len(s.out) > n {
+		for range count - 1 {
+			s.out = append(s.out, s.out[n])
+		}
+	}
+}
+
 func (s *splitter) mark(i int) {
 	if s.start < 0 {
 		s.start = i
@@ -103,6 +125,14 @@ func (s *splitter) run() {
 			if s.d == Oracle {
 				if end, ok := slashLine(src, i); ok {
 					s.emit(i)
+					i = end
+					continue
+				}
+			}
+			// SQL Server: a "GO [count]" line ends the batch.
+			if s.d == MSSQL {
+				if count, end, ok := goLine(src, i); ok {
+					s.emitRepeated(i, count)
 					i = end
 					continue
 				}
@@ -134,6 +164,9 @@ func (s *splitter) run() {
 			continue
 		case c == '#' && s.d == MySQL:
 			i = skipLine(src, i)
+			continue
+		case c == '/' && strings.HasPrefix(src[i:], "/*") && s.d == MSSQL:
+			i = skipNestedComment(src, i)
 			continue
 		case c == '/' && strings.HasPrefix(src[i:], "/*"):
 			if end := strings.Index(src[i+2:], "*/"); end >= 0 {
@@ -169,6 +202,8 @@ func (s *splitter) run() {
 			i = skipQuoted(src, i, '"', s.d == MySQL)
 		case c == '`':
 			i = skipQuoted(src, i, '`', false)
+		case c == '[' && s.d == MSSQL:
+			i = skipQuoted(src, i, ']', false)
 		case (c == 'q' || c == 'Q') && s.d == Oracle && i+2 < len(src) && src[i+1] == '\'' && !identBefore(src, i):
 			i = skipOracleQ(src, i)
 		case c == '$' && s.d == Postgres && !identBefore(src, i):
@@ -383,6 +418,58 @@ func slashLine(src string, i int) (int, bool) {
 	return end, true
 }
 
+// skipNestedComment skips a /* */ comment starting at i, where comments
+// may nest (SQL Server).
+func skipNestedComment(src string, i int) int {
+	depth := 0
+	for i < len(src) {
+		switch {
+		case strings.HasPrefix(src[i:], "/*"):
+			depth++
+			i += 2
+		case strings.HasPrefix(src[i:], "*/"):
+			depth--
+			i += 2
+			if depth == 0 {
+				return i
+			}
+		default:
+			i++
+		}
+	}
+	return len(src)
+}
+
+// goLine parses a SQL Server batch separator line starting at i: "GO",
+// optionally followed by a repeat count and a -- comment. It returns the
+// count (at least 1) and the end of the line.
+func goLine(src string, i int) (int, int, bool) {
+	j := i
+	for j < len(src) && (src[j] == ' ' || src[j] == '\t') {
+		j++
+	}
+	if len(src)-j < 2 || !strings.EqualFold(src[j:j+2], "GO") {
+		return 0, 0, false
+	}
+	end := skipLine(src, j)
+	rest := src[j+2 : end]
+	if k := strings.Index(rest, "--"); k >= 0 {
+		rest = rest[:k]
+	}
+	if rest != "" && !isSpace(rune(rest[0])) {
+		return 0, 0, false // e.g. GOTO, or GO followed by an identifier character
+	}
+	count := 1
+	if f := strings.TrimSpace(rest); f != "" {
+		n, err := strconv.Atoi(f)
+		if err != nil || n < 1 {
+			return 0, 0, false
+		}
+		count = n
+	}
+	return count, end, true
+}
+
 // delimiterCommand parses a MySQL client "DELIMITER xx" line starting at i.
 func delimiterCommand(src string, i int) (string, int, bool) {
 	j := i
@@ -419,7 +506,10 @@ func identBefore(src string, i int) bool {
 
 // ReturnsRows reports whether a statement is expected to produce a result
 // set and should therefore be run as a query rather than executed.
-func ReturnsRows(stmt string) bool {
+func ReturnsRows(stmt string, d Dialect) bool {
+	if d == MSSQL {
+		return batchReturnsRows(stmt)
+	}
 	w := firstWord(stmt)
 	switch w {
 	case "SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "DESC", "EXPLAIN",
@@ -427,6 +517,71 @@ func ReturnsRows(stmt string) bool {
 		return true
 	}
 	return false
+}
+
+// batchReturnsRows reports whether a SQL Server batch may produce result
+// sets. A batch can hold several statements, so it is only executed (which
+// reports the rows affected) when no statement in it can return rows. A
+// batch starting with an unknown word is a procedure call without EXEC.
+func batchReturnsRows(batch string) bool {
+	switch w := firstWord(batch); {
+	case w == "":
+		return false
+	case !tsqlStatements[w]:
+		return true
+	}
+	for _, w := range words(batch) {
+		switch w {
+		case "SELECT", "EXEC", "EXECUTE", "OUTPUT", "FETCH", "DBCC", "RESTORE", "RECEIVE", "READTEXT":
+			return true
+		}
+	}
+	return false
+}
+
+// tsqlStatements are the words a T-SQL statement that is not a procedure
+// call can start with.
+var tsqlStatements = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`ADD ALTER BACKUP BEGIN BREAK BULK CHECKPOINT CLOSE COMMIT CONTINUE
+		CREATE DEALLOCATE DECLARE DELETE DENY DISABLE DROP ENABLE GOTO GRANT IF INSERT KILL MERGE OPEN
+		PRINT RAISERROR RECONFIGURE RETURN REVERT REVOKE ROLLBACK SAVE SET SETUSER SHUTDOWN THROW
+		TRUNCATE UPDATE UPDATETEXT USE WAITFOR WHILE WITH WRITETEXT SELECT EXEC EXECUTE DBCC RESTORE
+		RECEIVE READTEXT FETCH (`) {
+		tsqlStatements[w] = true
+	}
+}
+
+// words returns the upper-cased words of a SQL Server batch, skipping
+// strings, quoted identifiers and comments.
+func words(src string) []string {
+	var out []string
+	for i := 0; i < len(src); {
+		c := src[i]
+		switch {
+		case c == '-' && strings.HasPrefix(src[i:], "--"):
+			i = skipLine(src, i)
+		case c == '/' && strings.HasPrefix(src[i:], "/*"):
+			i = skipNestedComment(src, i)
+		case c == '\'' || c == '"':
+			i = skipQuoted(src, i, c, false)
+		case c == '[':
+			i = skipQuoted(src, i, ']', false)
+		case isIdentStart(c) || c == '@' || c == '#':
+			j := i + 1
+			for j < len(src) && (isIdentChar(src[j]) || src[j] == '@') {
+				j++
+			}
+			if isIdentStart(c) {
+				out = append(out, strings.ToUpper(src[i:j]))
+			}
+			i = j
+		default:
+			i++
+		}
+	}
+	return out
 }
 
 // firstWord returns the first keyword of a statement, upper-cased, skipping

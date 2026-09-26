@@ -25,6 +25,11 @@ func TestQualifiedName(t *testing.T) {
 		{config.SQLite, Node{Kind: KindTable, Database: "main", Object: "orders"}, "orders"},
 		{config.SQLite, Node{Kind: KindTable, Database: "aux", Object: "Orders"}, "aux.Orders"},
 		{config.DuckDB, Node{Kind: KindView, Database: "test", Schema: "main", Object: "v 1"}, `main."v 1"`},
+		{config.MSSQL, Node{Kind: KindTable, Database: "shop", Schema: "dbo", Object: "Orders"}, "dbo.Orders"},
+		{config.MSSQL, Node{Kind: KindView, Schema: "sales", Object: "order details"}, "sales.[order details]"},
+		{config.MSSQL, Node{Kind: KindTable, Schema: "dbo", Object: "user"}, "dbo.[user]"},
+		{config.MSSQL, Node{Kind: KindTable, Schema: "dbo", Object: "a]b"}, "dbo.[a]]b]"},
+		{config.MSSQL, Node{Kind: KindTable, Schema: "dbo", Object: "t#1"}, "dbo.t#1"},
 		{config.CSV, Node{Kind: KindView, Database: "memory", Schema: "main", Object: "sales_2026"}, "sales_2026"},
 		{config.Postgres, Node{Kind: KindFunction, Schema: "s", Object: "f"}, ""},
 	}

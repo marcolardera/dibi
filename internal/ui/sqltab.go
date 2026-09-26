@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"dibi/internal/db"
 	"dibi/internal/pager"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	qt "github.com/mappu/miqt/qt6"
+	mssql "github.com/microsoft/go-mssqldb"
 )
 
 // sqlTab is a SQL editor with its results. It owns a database session,
@@ -296,7 +298,7 @@ func (t *sqlTab) execute(ctx context.Context, src *db.Source, database, text str
 		}
 		t0 := time.Now()
 		last := i == len(stmts)-1
-		if sqlsplit.ReturnsRows(st.Text) {
+		if sqlsplit.ReturnsRows(st.Text, src.SplitDialect()) {
 			failed = t.runQuery(ctx, sess, src, database, st, label, last, t0)
 		} else {
 			failed = t.runExec(ctx, sess, st, label, t0)
@@ -321,59 +323,85 @@ func (t *sqlTab) execute(ctx context.Context, src *db.Source, database, text str
 	}
 }
 
-// runQuery opens a cursor and shows its first page in a new result tab.
-// Except for the last statement, the cursor is closed after the first page
-// (the session can only have one open cursor).
+// runQuery opens a cursor and shows the first page of each of its result
+// sets in a new result tab. A result set is only reachable once the
+// previous one has been fully read, so the sets after a partial one are not
+// shown. Except for the last statement, the cursor is closed after the
+// first page (the session can only have one open cursor).
 func (t *sqlTab) runQuery(ctx context.Context, sess *db.Session, src *db.Source, database string,
 	st sqlsplit.Statement, label string, last bool, t0 time.Time) error {
 	p, err := pager.New(ctx, sess, st.Text)
 	if err != nil {
 		return err
 	}
-	t.mu.Lock()
-	t.active = p
-	t.mu.Unlock()
-	rows, err := p.Page(0)
-	t.mu.Lock()
-	t.active = nil
-	t.mu.Unlock()
-	if err != nil {
-		p.Close()
-		return err
-	}
-	partial := false
-	if !last {
-		partial = !p.Done()
-		p.Close()
-	}
-	elapsed := time.Since(t0)
-
-	if len(p.Cols) == 0 { // e.g. a data-modifying WITH statement
-		p.Close()
-		onUIWait(func() {
-			t.messages.AppendPlainText(fmt.Sprintf("%sStatement executed (%.3f s).", label, elapsed.Seconds()))
-		})
-		return nil
-	}
-	onUIWait(func() {
-		v := newResultView(t.app)
-		v.src, v.database, v.exportQuery = src, database, st.Text
-		v.show(p, rows, partial)
-		t.views = append(t.views, v)
-		title := fmt.Sprintf("Result %d", len(t.views))
-		idx := t.results.InsertTab(len(t.views)-1, v.widget(), title)
-		t.results.SetTabToolTip(idx, firstLine(st.Text, 200))
-		t.results.SetCurrentIndex(idx)
-
-		more := ""
-		switch {
-		case partial:
-			more = fmt.Sprintf(" (first %d shown; run the statement alone to page through all rows)", pager.PageSize)
-		case !p.Done():
-			more = "+"
+	for set := 1; p != nil; set++ {
+		t.mu.Lock()
+		t.active = p
+		t.mu.Unlock()
+		rows, err := p.Page(0)
+		t.mu.Lock()
+		t.active = nil
+		t.mu.Unlock()
+		if err != nil {
+			p.Close()
+			return err
 		}
-		t.messages.AppendPlainText(fmt.Sprintf("%s%d row(s)%s fetched in %.3f s.", label, len(rows), more, elapsed.Seconds()))
-	})
+		var next *pager.Pager
+		if p.Done() {
+			if next, err = p.NextResult(); err != nil {
+				p.Close()
+				return err
+			}
+		}
+		partial := false
+		if !last {
+			partial = !p.Done()
+			p.Close() // no-op once the cursor is handed to next
+		}
+		elapsed := time.Since(t0)
+
+		if len(p.Cols) == 0 { // e.g. a data-modifying WITH statement
+			p.Close()
+			if set == 1 && next == nil {
+				onUIWait(func() {
+					t.messages.AppendPlainText(fmt.Sprintf("%sStatement executed (%.3f s).", label, elapsed.Seconds()))
+				})
+			}
+			p = next
+			continue
+		}
+		setLabel := label
+		if set > 1 || next != nil {
+			setLabel = fmt.Sprintf("%sResult set %d: ", label, set)
+		}
+		exportQuery := ""
+		if set == 1 { // re-running the statement only reaches the first result set
+			exportQuery = st.Text
+		}
+		cur := p
+		onUIWait(func() {
+			v := newResultView(t.app)
+			v.src, v.database, v.exportQuery = src, database, exportQuery
+			v.show(cur, rows, partial)
+			t.views = append(t.views, v)
+			title := fmt.Sprintf("Result %d", len(t.views))
+			idx := t.results.InsertTab(len(t.views)-1, v.widget(), title)
+			t.results.SetTabToolTip(idx, firstLine(st.Text, 200))
+			if set == 1 {
+				t.results.SetCurrentIndex(idx)
+			}
+
+			more := ""
+			switch {
+			case partial:
+				more = fmt.Sprintf(" (first %d shown; run the statement alone to page through all rows)", pager.PageSize)
+			case !cur.Done():
+				more = "+"
+			}
+			t.messages.AppendPlainText(fmt.Sprintf("%s%d row(s)%s fetched in %.3f s.", setLabel, len(rows), more, elapsed.Seconds()))
+		})
+		p = next
+	}
 	return nil
 }
 
@@ -459,7 +487,10 @@ func (t *sqlTab) dispose() {
 	go t.dropSession()
 }
 
-var oraclePosition = regexp.MustCompile(`error occur at position: (\d+)`)
+var (
+	oraclePosition = regexp.MustCompile(`error occur at position: (\d+)`)
+	mssqlNear      = regexp.MustCompile(`near '([^']+)'`)
+)
 
 // showErrorPosition moves the editor cursor to the position of the error
 // in the failed statement, when the database reports one.
@@ -470,6 +501,8 @@ func (t *sqlTab) showErrorPosition(err error, text string, base int, st sqlsplit
 		pos = int(pgErr.Position) - 1
 	} else if m := oraclePosition.FindStringSubmatch(err.Error()); m != nil {
 		pos, _ = strconv.Atoi(m[1])
+	} else if msErr := (mssql.Error{}); errors.As(err, &msErr) && msErr.ProcName == "" {
+		pos = mssqlErrorPosition(st.Text, int(msErr.LineNo), msErr.Message)
 	}
 	if pos < 0 {
 		return
@@ -482,4 +515,27 @@ func (t *sqlTab) showErrorPosition(err error, text string, base int, st sqlsplit
 	cur := t.editor.TextCursor()
 	cur.SetPosition(offset)
 	t.editor.SetTextCursor(cur)
+}
+
+// mssqlErrorPosition returns the character offset in a batch of a SQL
+// Server error at the given 1-based line: at the token named by "near 'x'"
+// when it is on that line, else at the start of the line; -1 if unknown.
+func mssqlErrorPosition(batch string, line int, msg string) int {
+	if line < 1 {
+		return -1
+	}
+	lines := strings.SplitAfter(batch, "\n")
+	if line > len(lines) {
+		return -1
+	}
+	start := 0
+	for _, l := range lines[:line-1] {
+		start += utf8.RuneCountInString(l)
+	}
+	if m := mssqlNear.FindStringSubmatch(msg); m != nil {
+		if i := strings.Index(strings.ToLower(lines[line-1]), strings.ToLower(m[1])); i >= 0 {
+			return start + utf8.RuneCountInString(lines[line-1][:i])
+		}
+	}
+	return start
 }

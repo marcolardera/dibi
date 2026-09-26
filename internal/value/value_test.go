@@ -29,6 +29,13 @@ func TestDisplay(t *testing.T) {
 		{"LongRaw", []byte{1}, "<binary 1 B>", false},
 		{"UUID", []byte{0x63, 0x44, 0xd0, 0xf3, 0x1d, 0xbb, 0x43, 0xa4, 0x87, 0x8b, 0x06, 0x66, 0xce, 0x1c, 0xb0, 0xb1},
 			"6344d0f3-1dbb-43a4-878b-0666ce1cb0b1", false},
+		{"UNIQUEIDENTIFIER", []byte{0xff, 0x19, 0x96, 0x6f, 0x86, 0x8b, 0x11, 0xd0, 0xb4, 0x2d, 0x00, 0xc0, 0x4f, 0xc9, 0x64, 0xff},
+			"6F9619FF-8B86-D011-B42D-00C04FC964FF", false},
+		{"DATETIMEOFFSET", ts, "2026-09-26 17:52:40.044553+02:00", false},
+		{"DATETIME2", ts, "2026-09-26 17:52:40.044553", false},
+		{"GEOGRAPHY", []byte{0xe6, 0x10}, "<binary 2 B>", false},
+		{"IMAGE", []byte{0xde, 0xad}, "<binary 2 B>", false},
+		{"MONEY", []byte("1.5000"), "1.5000", false},
 		{"DATE", midnight, "2026-09-26", false},
 		{"DATE", ts, "2026-09-26 17:52:40.044553", false}, // Oracle DATE with time
 		{"TIMESTAMP", ts, "2026-09-26 17:52:40.044553", false},

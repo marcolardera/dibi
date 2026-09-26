@@ -22,6 +22,7 @@ const (
 	MySQL    Type = "mysql"
 	MariaDB  Type = "mariadb"
 	Oracle   Type = "oracle"
+	MSSQL    Type = "sqlserver"
 	SQLite   Type = "sqlite"
 	DuckDB   Type = "duckdb"
 	CSV      Type = "csv"
@@ -29,7 +30,7 @@ const (
 )
 
 // Types lists every supported connection type, in display order.
-var Types = []Type{Postgres, MySQL, MariaDB, Oracle, SQLite, DuckDB, CSV, Parquet}
+var Types = []Type{Postgres, MySQL, MariaDB, Oracle, MSSQL, SQLite, DuckDB, CSV, Parquet}
 
 // Label returns the human-readable name of a connection type.
 func (t Type) Label() string {
@@ -42,6 +43,8 @@ func (t Type) Label() string {
 		return "MariaDB"
 	case Oracle:
 		return "Oracle"
+	case MSSQL:
+		return "SQL Server"
 	case SQLite:
 		return "SQLite"
 	case DuckDB:
@@ -72,14 +75,18 @@ func (t Type) DefaultPort() int {
 		return 3306
 	case Oracle:
 		return 1521
+	case MSSQL:
+		return 1433
 	}
 	return 0
 }
 
 // Connection holds the parameters of a saved connection.
 //
-// For Oracle, Database is the service name. In v1 the password is stored in
-// plaintext.
+// For Oracle, Database is the service name. For SQL Server, Host may name
+// an instance (host\instance, the port is then ignored), an empty User means
+// integrated (Windows/Kerberos) authentication, and Encrypt/TrustServerCert
+// set the TLS mode. In v1 the password is stored in plaintext.
 type Connection struct {
 	Name     string `yaml:"name"`
 	Type     Type   `yaml:"type"`
@@ -89,6 +96,9 @@ type Connection struct {
 	User     string `yaml:"user,omitempty"`
 	Password string `yaml:"password,omitempty"`
 	Path     string `yaml:"path,omitempty"`
+
+	Encrypt         bool `yaml:"encrypt,omitempty"`
+	TrustServerCert bool `yaml:"trust_server_certificate,omitempty"`
 }
 
 // Validate checks that the fields required by the connection type are set.

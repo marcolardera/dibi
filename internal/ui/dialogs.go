@@ -41,6 +41,11 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 	user := qt.NewQLineEdit2()
 	password := qt.NewQLineEdit2()
 	password.SetEchoMode(qt.QLineEdit__Password)
+	encrypt := qt.NewQCheckBox3("Encrypt connection")
+	trustCert := qt.NewQCheckBox3("Trust server certificate")
+	trustCert.SetToolTip("Accept a self-signed or otherwise unverified server certificate")
+	tlsRow := qt.NewQWidget2()
+	tlsRow.SetLayout(hbox(encrypt.QWidget, trustCert.QWidget).QLayout)
 	path := qt.NewQLineEdit2()
 	browse := qt.NewQPushButton3("Browse…")
 	pathRow := qt.NewQWidget2()
@@ -57,6 +62,8 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 	form.AddRow(dbLabel.QWidget, database.QWidget)
 	form.AddRow(userLabel.QWidget, user.QWidget)
 	form.AddRow(pwLabel.QWidget, password.QWidget)
+	tlsLabel := qt.NewQLabel3("Security:")
+	form.AddRow(tlsLabel.QWidget, tlsRow)
 	form.AddRow(pathLabel.QWidget, pathRow)
 
 	status := qt.NewQLabel2()
@@ -82,10 +89,19 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 		for _, w := range fileRows {
 			w.SetVisible(t.IsFile())
 		}
+		tlsLabel.SetVisible(t == config.MSSQL)
+		tlsRow.SetVisible(t == config.MSSQL)
 		if t == config.Oracle {
 			dbLabel.SetText("Service name:")
 		} else {
 			dbLabel.SetText("Database:")
+		}
+		if t == config.MSSQL {
+			host.SetPlaceholderText(`host or host\instance`)
+			user.SetPlaceholderText("empty for Windows authentication")
+		} else {
+			host.SetPlaceholderText("")
+			user.SetPlaceholderText("")
 		}
 		if resetPort && !t.IsFile() {
 			port.SetValue(t.DefaultPort())
@@ -124,6 +140,9 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 			c.Database = strings.TrimSpace(database.Text())
 			c.User = strings.TrimSpace(user.Text())
 			c.Password = password.Text()
+			if c.Type == config.MSSQL {
+				c.Encrypt, c.TrustServerCert = encrypt.IsChecked(), trustCert.IsChecked()
+			}
 		}
 		return c
 	}
@@ -193,6 +212,8 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 		database.SetText(existing.Database)
 		user.SetText(existing.User)
 		password.SetText(existing.Password)
+		encrypt.SetChecked(existing.Encrypt)
+		trustCert.SetChecked(existing.TrustServerCert)
 		path.SetText(existing.Path)
 		updateFields(false)
 	} else {

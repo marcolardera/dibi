@@ -171,6 +171,13 @@ func (i *Info) setSelect(qualified, limit string) {
 	i.Preview = i.SelectAll + " " + fmt.Sprintf(limit, PreviewRows)
 }
 
+// setSelectTop is setSelect for SQL Server, which has no LIMIT clause
+// (and OFFSET … FETCH requires an ORDER BY).
+func (i *Info) setSelectTop(qualified string) {
+	i.SelectAll = "SELECT * FROM " + qualified
+	i.Preview = fmt.Sprintf("SELECT TOP %d * FROM %s", PreviewRows, qualified)
+}
+
 // PreviewRows is the number of rows shown in the data preview.
 const PreviewRows = 50
 
@@ -203,6 +210,8 @@ func newDialect(t config.Type) (dialect, error) {
 		return mysqlDialect{}, nil
 	case config.Oracle:
 		return oracle{}, nil
+	case config.MSSQL:
+		return mssqlDialect{}, nil
 	case config.SQLite:
 		return sqlite{}, nil
 	case config.DuckDB:
@@ -240,7 +249,7 @@ func (s *Source) SplitDialect() sqlsplit.Dialect { return s.d.splitDialect() }
 func (s *Source) HasDatabases() bool { return s.d.hasDatabases() }
 
 // SwitchableDatabases reports whether a session can be bound to one of
-// several databases (Postgres, MySQL/MariaDB, DuckDB).
+// several databases (Postgres, MySQL/MariaDB, SQL Server, DuckDB).
 func (s *Source) SwitchableDatabases() bool {
 	return s.d.hasDatabases() && s.Conn.Type != config.SQLite
 }
@@ -270,8 +279,11 @@ func (s *Source) DefaultDatabase(ctx context.Context) string {
 		return ""
 	}
 	q := "SELECT current_database()"
-	if s.Conn.Type == config.MySQL || s.Conn.Type == config.MariaDB {
+	switch s.Conn.Type {
+	case config.MySQL, config.MariaDB:
 		q = "SELECT COALESCE(DATABASE(), '')"
+	case config.MSSQL:
+		q = "SELECT DB_NAME()"
 	}
 	name, _ := queryString(ctx, pool, q)
 	return name
@@ -403,11 +415,22 @@ type Session struct {
 	// interrupt, if set, stops the running query server-side; the context
 	// passed to the driver is then never cancelled.
 	interrupt func()
+	// plainCancel: the context passed to the driver is cancelled with the
+	// caller's one but never reaches its deadline (see plainCanceller).
+	plainCancel bool
 }
 
 // interrupter is implemented by dialects that cancel queries server-side.
 type interrupter interface {
 	sessionInterrupt(ctx context.Context, pool *sql.DB, conn *sql.Conn) (func(), error)
+}
+
+// plainCanceller is implemented by dialects whose driver drops the
+// connection when a context deadline expires, but not when the context is
+// cancelled (SQL Server). Sessions then turn deadlines into cancellations,
+// so that a timeout does not lose the session state.
+type plainCanceller interface {
+	plainCancel() bool
 }
 
 // NewSession opens a dedicated connection, bound to database if not empty.
@@ -427,6 +450,9 @@ func (s *Source) NewSession(ctx context.Context, database string) (*Session, err
 			return nil, err
 		}
 	}
+	if pc, ok := s.d.(plainCanceller); ok {
+		ss.plainCancel = pc.plainCancel()
+	}
 	if in, ok := s.d.(interrupter); ok {
 		if ss.interrupt, err = in.sessionInterrupt(ctx, pool, conn); err != nil {
 			ss.Close()
@@ -439,6 +465,13 @@ func (s *Source) NewSession(ctx context.Context, database string) (*Session, err
 // driverContext returns the context to hand to the driver, and a function
 // to call when the driver call returns.
 func (ss *Session) driverContext(ctx context.Context) (context.Context, func() bool) {
+	if ss.plainCancel {
+		// The driver context must live as long as ctx: rows returned by a
+		// query still use it, so the AfterFunc is not stopped on return.
+		dctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		context.AfterFunc(ctx, cancel)
+		return dctx, func() bool { return true }
+	}
 	if ss.interrupt == nil {
 		return ctx, func() bool { return true }
 	}

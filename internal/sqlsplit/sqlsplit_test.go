@@ -80,6 +80,21 @@ func TestSplit(t *testing.T) {
 			[]string{"CREATE PACKAGE pk AS\n  PROCEDURE a;\nEND pk;", "SELECT 1 FROM dual", "SELECT 2 FROM dual"}},
 		{"oracle q-quote", Oracle, "SELECT q'[a;']b]' FROM dual; SELECT 2 FROM dual",
 			[]string{"SELECT q'[a;']b]' FROM dual", "SELECT 2 FROM dual"}},
+		{"mssql splits at GO only", MSSQL,
+			"DECLARE @x INT = 1;\nSELECT @x;\nGO\nSELECT 2\nSELECT 3\n  go  \nSELECT 4",
+			[]string{"DECLARE @x INT = 1;\nSELECT @x;", "SELECT 2\nSELECT 3", "SELECT 4"}},
+		{"mssql GO with count and comment", MSSQL, "INSERT INTO t DEFAULT VALUES\nGO 3 -- thrice\nSELECT 1",
+			[]string{"INSERT INTO t DEFAULT VALUES", "INSERT INTO t DEFAULT VALUES", "INSERT INTO t DEFAULT VALUES", "SELECT 1"}},
+		{"mssql GO in strings, identifiers and comments", MSSQL,
+			"SELECT 'a\nGO\nb', [x\nGO\n]]y] /* /* nested\nGO\n*/\nGO\n*/\nGO\nSELECT 2",
+			[]string{"SELECT 'a\nGO\nb', [x\nGO\n]]y] /* /* nested\nGO\n*/\nGO\n*/", "SELECT 2"}},
+		{"mssql GOTO and identifiers starting with go are not separators", MSSQL,
+			"IF 1 = 1\nGOTO done\ngoal:\ngo_on\nGO", []string{"IF 1 = 1\nGOTO done\ngoal:\ngo_on"}},
+		{"mssql procedure keeps its body", MSSQL,
+			"CREATE PROCEDURE p AS\nBEGIN\n  SET NOCOUNT ON;\n  BEGIN TRAN;\n  SELECT 1;\n  COMMIT;\nEND\nGO\nEXEC p",
+			[]string{"CREATE PROCEDURE p AS\nBEGIN\n  SET NOCOUNT ON;\n  BEGIN TRAN;\n  SELECT 1;\n  COMMIT;\nEND", "EXEC p"}},
+		{"mssql empty batches dropped", MSSQL, "GO\n-- c\nGO\n\nGO", nil},
+
 		{"oracle division at line start is not a terminator", Oracle, "SELECT 4\n/ 2 FROM dual",
 			[]string{"SELECT 4\n/ 2 FROM dual"}},
 	}
@@ -119,8 +134,32 @@ func TestReturnsRows(t *testing.T) {
 		"BEGIN NULL; END;":              false,
 		"":                              false,
 	} {
-		if got := ReturnsRows(stmt); got != want {
+		if got := ReturnsRows(stmt, Generic); got != want {
 			t.Errorf("ReturnsRows(%q) = %v, want %v", stmt, got, want)
+		}
+	}
+}
+
+func TestReturnsRowsMSSQL(t *testing.T) {
+	for stmt, want := range map[string]bool{
+		"SELECT 1":                                    true,
+		"UPDATE a SET b = 1":                          false,
+		"UPDATE a SET b = 1\nUPDATE c SET d = 2":      false,
+		"UPDATE a SET b = 1\nSELECT @@ROWCOUNT":       true,
+		"DECLARE @x INT = 1; SELECT @x":               true,
+		"INSERT INTO a OUTPUT inserted.id VALUES (1)": true,
+		"INSERT INTO a VALUES ('SELECT')":             false,
+		"DELETE FROM [select] -- SELECT\n/* EXEC */":  false,
+		"EXEC sp_who":                                 true,
+		"sp_who":                                      true,
+		"dbo.my_proc 1, 2":                            true,
+		"CREATE TABLE a (b int)":                      false,
+		"BEGIN TRAN":                                  false,
+		"SET NOCOUNT ON":                              false,
+		"":                                            false,
+	} {
+		if got := ReturnsRows(stmt, MSSQL); got != want {
+			t.Errorf("ReturnsRows(%q, MSSQL) = %v, want %v", stmt, got, want)
 		}
 	}
 }

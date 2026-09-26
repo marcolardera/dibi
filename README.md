@@ -5,8 +5,8 @@ their metadata, run queries and export results. A smaller, faster
 alternative to DBeaver or DataGrip.
 
 Supported sources: **PostgreSQL**, **MySQL**, **MariaDB**, **Oracle** (no
-Instant Client needed), **SQLite**, **DuckDB**, and **CSV** / **Parquet**
-files (queried through DuckDB).
+Instant Client needed), **SQL Server**, **SQLite**, **DuckDB**, and **CSV** /
+**Parquet** files (queried through DuckDB).
 
 See [spec.md](spec.md) for the full specification.
 
@@ -54,7 +54,7 @@ Stored in the user config directory (`~/.config/dibi` on Linux):
 
 ```sh
 make test          # unit tests + embedded databases
-make test-servers  # also PostgreSQL, MySQL, MariaDB, Oracle (Docker)
+make test-servers  # also PostgreSQL, MySQL, MariaDB, Oracle, SQL Server (Docker)
 ```
 
 The server tests expect these containers:

@@ -14,6 +14,7 @@ It should support, for the first iteration, the following databases:
 - MariaDB
 - MySQL
 - Oracle DB
+- Microsoft SQL Server
 - SQLite
 - DuckDB
 
@@ -37,6 +38,7 @@ The tool must support running custom SQL queries in an editor (with syntax highl
 | PostgreSQL         | `github.com/jackc/pgx`                                              |
 | MySQL / MariaDB    | `github.com/go-sql-driver/mysql`                                    |
 | Oracle             | `github.com/sijms/go-ora/v2` (pure Go, no Oracle Instant Client needed) |
+| SQL Server         | `github.com/microsoft/go-mssqldb` (pure Go)                         |
 | SQLite             | `modernc.org/sqlite` (pure Go)                                      |
 | DuckDB             | `github.com/duckdb/duckdb-go` (cgo, statically linked)              |
 | CSV / Parquet      | DuckDB (`read_csv_auto`, `read_parquet`)                            |
@@ -116,6 +118,7 @@ The hierarchy depends on the database type:
 | PostgreSQL      | Connection → Database → Schema → object type → object            |
 | MySQL / MariaDB | Connection → Database (= schema) → object type → object          |
 | Oracle          | Connection → Schema (= user) → object type → object              |
+| SQL Server      | Connection → Database → Schema → object type → object            |
 | SQLite          | Connection → Database (`main` + attached) → object type → object |
 | DuckDB          | Connection → Database → Schema → object type → object            |
 | CSV / Parquet   | Connection (a single file) → the file, shown as one table        |
@@ -130,7 +133,7 @@ Left click opens the information panel with the detailed information about the o
 - For views, stored procedures and functions: the **source code**, shown read-only with syntax highlighting.
 - A data preview of the first 50 rows (tables and views).
 
-The preview query uses the right syntax for each database type (e.g. `LIMIT 50`, or `FETCH FIRST 50 ROWS ONLY` on Oracle).
+The preview query uses the right syntax for each database type (e.g. `LIMIT 50`, `FETCH FIRST 50 ROWS ONLY` on Oracle, `SELECT TOP 50` on SQL Server).
 
 ### New Connection window
 
@@ -230,6 +233,7 @@ Small application state (such as the last used connection) is stored in `dibi/st
 
 - PostgreSQL 12+
 - Oracle 12c+
+- SQL Server 2012+ (tested on 2022)
 - MySQL, MariaDB, SQLite, DuckDB: currently supported releases
 
 ## Look and feel
@@ -240,13 +244,14 @@ In v1, passwords are stored in **plaintext** in the connection YAML file. Moving
 
 ## Implementation notes (v1)
 
-- **Sessions and Stop.** Each SQL editor tab has its own connection. Stop cancels the query server-side and keeps the session (temporary tables, settings, open transactions survive): Postgres sends a cancel request, MySQL/MariaDB run `KILL QUERY` from another connection, Oracle sends a break. A session that dies anyway is reopened on the next run.
-- **Scripts.** Statements are split per dialect: Postgres dollar quotes, MySQL `DELIMITER`, Oracle PL/SQL blocks (`BEGIN`/`DECLARE`, `CREATE PROCEDURE/FUNCTION/TRIGGER`) and the `/` line terminator, which is required after `CREATE PACKAGE` and `CREATE TYPE`. Statements run in order and execution stops at the first error. Since a session has a single cursor, only the last result set of a script can be paged; earlier ones show their first 1000 rows.
-- **Errors.** When the database reports the position of an error (Postgres, Oracle), the editor cursor moves there.
-- **Copy name.** `Ctrl+C` (or "Copy Name" in the context menu) on a table, view or materialized view in the tree copies its reference as typed in a query: `schema.table` (Postgres, Oracle, DuckDB), `database.table` (MySQL/MariaDB), `table` (SQLite `main`, CSV/Parquet). Identifiers are quoted only when needed (case, special characters, reserved words).
+- **Sessions and Stop.** Each SQL editor tab has its own connection. Stop cancels the query server-side and keeps the session (temporary tables, settings, open transactions survive): Postgres sends a cancel request, MySQL/MariaDB run `KILL QUERY` from another connection, Oracle sends a break, SQL Server sends an attention packet. The SQL Server driver drops the connection when a context *deadline* expires, so sessions pass it a context that is cancelled with the caller's but has no deadline. A session that dies anyway is reopened on the next run.
+- **Scripts.** Statements are split per dialect: Postgres dollar quotes, MySQL `DELIMITER`, Oracle PL/SQL blocks (`BEGIN`/`DECLARE`, `CREATE PROCEDURE/FUNCTION/TRIGGER`) and the `/` line terminator, which is required after `CREATE PACKAGE` and `CREATE TYPE`. SQL Server scripts are split into batches at `GO` lines only (`GO n` repeats a batch), like sqlcmd and SSMS: variables live for a batch and `CREATE VIEW/PROCEDURE/…` must start one. A batch is executed (reporting the rows affected) only when no statement in it can return rows; otherwise every result set it returns gets its own result tab. Statements run in order and execution stops at the first error. Since a session has a single cursor, only the last result set of a script can be paged; earlier ones show their first 1000 rows. A result set is only reachable once the previous one has been fully read, so the sets following a result larger than a page are not shown. Only the first result set of a statement can be exported (export re-runs the statement).
+- **Errors.** When the database reports the position of an error (Postgres, Oracle), the editor cursor moves there. SQL Server reports the line in the batch; the cursor goes to the token named by "Incorrect syntax near 'x'" on that line, or to the line start.
+- **Copy name.** `Ctrl+C` (or "Copy Name" in the context menu) on a table, view or materialized view in the tree copies its reference as typed in a query: `schema.table` (Postgres, Oracle, SQL Server, DuckDB), `database.table` (MySQL/MariaDB), `table` (SQLite `main`, CSV/Parquet). Identifiers are quoted only when needed (case, special characters, reserved words).
 - **Info panel tabs.** The preview sub-tab is titled "Data preview" to make clear it only shows the first 50 rows.
 - **Export from the info panel** exports the whole table or view, not only the 50-row preview.
-- **System objects are hidden**: Postgres `pg_*`/`information_schema` schemas, MySQL system databases, Oracle-maintained users, Oracle LOB indexes.
+- **System objects are hidden**: Postgres `pg_*`/`information_schema` schemas, MySQL system databases, Oracle-maintained users, Oracle LOB indexes, SQL Server `sys`/`INFORMATION_SCHEMA`/fixed-role schemas and shipped objects (system databases are listed last).
+- **SQL Server connections.** `host\instance` names a named instance (the port is then found through the SQL Server Browser). An empty user means integrated authentication. "Encrypt connection" and "Trust server certificate" set the TLS mode (a self-signed certificate needs the latter).
 - **File connections** refuse to open a missing file (a mistyped path does not create an empty database).
 - **Theme.** If the desktop theme is dark, Dibi switches to Qt's light Fusion palette.
 

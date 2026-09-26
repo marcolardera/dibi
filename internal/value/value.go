@@ -2,7 +2,7 @@
 //
 // Drivers return different Go types for the same SQL type (MySQL returns
 // most values as []byte, Oracle returns NUMBER as a string, DuckDB returns
-// UUID as 16 bytes…), so formatting uses both the Go value and the database
+// UUID as 16 bytes, SQL Server UNIQUEIDENTIFIER as 16 mixed-endian bytes…), so formatting uses both the Go value and the database
 // type name of the column.
 package value
 
@@ -30,6 +30,7 @@ type Column struct {
 	binary   bool
 	numeric  bool
 	uuid     bool
+	guid     bool // SQL Server UNIQUEIDENTIFIER
 	dateOnly bool // DATE (Oracle DATE may carry a time: shown if not midnight)
 	timeOnly bool
 	zone     bool // show the UTC offset
@@ -41,10 +42,12 @@ func NewColumn(name, dbType string) Column {
 	c := Column{Name: name, Type: dbType}
 	switch {
 	case strings.Contains(t, "BLOB") || strings.Contains(t, "BINARY") || t == "BYTEA" ||
-		strings.Contains(t, "RAW") || t == "GEOMETRY":
+		strings.Contains(t, "RAW") || t == "GEOMETRY" || t == "GEOGRAPHY" || t == "IMAGE" || t == "HIERARCHYID":
 		c.binary = !strings.Contains(t, "DOUBLE") // Oracle BINARY_DOUBLE is a number
 	case t == "UUID":
 		c.uuid = true
+	case t == "UNIQUEIDENTIFIER":
+		c.guid = true
 	}
 	switch {
 	case isNumericType(t):
@@ -54,7 +57,7 @@ func NewColumn(name, dbType string) Column {
 	case strings.HasPrefix(t, "TIME") && !strings.HasPrefix(t, "TIMESTAMP"):
 		c.timeOnly = true
 	}
-	c.zone = strings.Contains(t, "TZ") || strings.Contains(t, "TIME ZONE")
+	c.zone = strings.Contains(t, "TZ") || strings.Contains(t, "TIME ZONE") || t == "DATETIMEOFFSET"
 	return c
 }
 
@@ -96,6 +99,8 @@ func (c Column) Text(v any) string {
 			return "0x" + strings.ToUpper(hex.EncodeToString(x))
 		case c.uuid && len(x) == 16:
 			return formatUUID(x)
+		case c.guid && len(x) == 16:
+			return formatGUID(x)
 		}
 		return string(x)
 	case string:
@@ -211,6 +216,14 @@ func formatInterval(iv duckdb.Interval) string {
 func formatUUID(b []byte) string {
 	h := hex.EncodeToString(b)
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+}
+
+// formatGUID renders a SQL Server UNIQUEIDENTIFIER, whose first three
+// groups are stored little-endian, in upper case like SQL Server does.
+func formatGUID(b []byte) string {
+	g := []byte{b[3], b[2], b[1], b[0], b[5], b[4], b[7], b[6]}
+	g = append(g, b[8:]...)
+	return strings.ToUpper(formatUUID(g))
 }
 
 // formatComposite renders lists and maps (DuckDB LIST/STRUCT/MAP) in a

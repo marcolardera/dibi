@@ -27,17 +27,22 @@ type interrupter interface {
 
 // Pager keeps a cursor open and fetches one page at a time on demand.
 // Its methods are safe to call from any goroutine.
+//
+// A query may return several result sets (SQL Server batches, procedure
+// calls): each one is read by its own pager, see NextResult.
 type Pager struct {
 	Cols []*sql.ColumnType
 
 	cancel    context.CancelFunc
 	interrupt func()
-	finished  atomic.Bool // the cursor is exhausted or closed
+	finished  atomic.Bool // the result set is exhausted or closed
+	handedOff atomic.Bool // the cursor now belongs to the next result's pager
 
 	mu    sync.Mutex
 	rows  *sql.Rows
 	pages [][][]any
 	done  bool
+	next  bool // another result set follows; the cursor is kept open for it
 }
 
 // New runs query and returns a pager positioned before the first row.
@@ -105,9 +110,12 @@ func (p *Pager) fetchNext() error {
 	for len(page) < PageSize {
 		if !p.rows.Next() {
 			p.setDone()
-			p.rows.Close()
 			if err := p.rows.Err(); err != nil {
+				p.rows.Close()
 				return err
+			}
+			if p.next = p.rows.NextResultSet(); !p.next {
+				p.rows.Close()
 			}
 			break
 		}
@@ -127,6 +135,27 @@ func (p *Pager) fetchNext() error {
 		p.pages = append(p.pages, page)
 	}
 	return nil
+}
+
+// NextResult returns a pager on the next result set of the query, or nil
+// if the current one has not been fully read or is the last one. The cursor
+// then belongs to the returned pager: closing p no longer affects it.
+func (p *Pager) NextResult() (*Pager, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.next {
+		return nil, nil
+	}
+	p.next = false
+	p.handedOff.Store(true)
+	n := &Pager{rows: p.rows, cancel: p.cancel, interrupt: p.interrupt}
+	cols, err := p.rows.ColumnTypes()
+	if err != nil {
+		n.Close()
+		return nil, err
+	}
+	n.Cols = cols
+	return n, nil
 }
 
 // Done reports whether the cursor has been fully read.
@@ -151,6 +180,9 @@ func (p *Pager) setDone() {
 // Cancel interrupts a fetch in progress. It may be called from any goroutine
 // and does not wait for the fetch to return.
 func (p *Pager) Cancel() {
+	if p.handedOff.Load() {
+		return
+	}
 	p.stopServer()
 	p.cancel()
 }
@@ -166,6 +198,9 @@ func (p *Pager) stopServer() {
 // Close cancels the cursor and releases it. It waits for any fetch in
 // progress to return.
 func (p *Pager) Close() {
+	if p.handedOff.Load() {
+		return
+	}
 	p.stopServer()
 	p.cancel()
 	p.mu.Lock()

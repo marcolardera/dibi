@@ -7,7 +7,7 @@ import (
 )
 
 // sqlKeywords are highlighted in the editor (ANSI SQL plus common
-// procedural keywords).
+// procedural and T-SQL keywords).
 var sqlKeywords = []string{
 	"add", "all", "alter", "and", "any", "as", "asc", "begin", "between", "by", "call", "cascade",
 	"case", "cast", "check", "column", "commit", "constraint", "create", "cross", "current_date",
@@ -20,6 +20,9 @@ var sqlKeywords = []string{
 	"right", "rollback", "row", "rows", "savepoint", "schema", "select", "sequence", "set", "table",
 	"then", "to", "transaction", "trigger", "true", "truncate", "union", "unique", "update", "using",
 	"values", "view", "when", "where", "while", "window", "with",
+	// T-SQL
+	"catch", "clustered", "go", "identity", "nocount", "nonclustered", "output", "print", "raiserror",
+	"throw", "top", "tran", "try", "waitfor",
 }
 
 type highlightRule struct {

@@ -70,6 +70,7 @@ func TestValidate(t *testing.T) {
 		{Connection{Name: "a", Type: Postgres, Host: "h", Port: 5432}, true},
 		{Connection{Name: "a", Type: Postgres, Host: "h"}, false},
 		{Connection{Name: "a", Type: Oracle, Host: "h", Port: 1521}, false},
+		{Connection{Name: "a", Type: MSSQL, Host: `h\sqlexpress`, Port: 1433}, true},
 		{Connection{Name: "a", Type: "nope", Host: "h", Port: 1}, false},
 	}
 	for _, c := range cases {

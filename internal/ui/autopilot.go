@@ -199,6 +199,7 @@ func runAutopilot(a *App) {
 		{[]string{"pg", "dibi", "dibi_test", "Tables", "orders"}, "dibi_test.orders"},
 		{[]string{"mysql", "dibi_test", "Views", "v_orders"}, "dibi_test.v_orders"},
 		{[]string{"oracle", "DIBI", "Tables", "CUSTOMERS"}, "DIBI.CUSTOMERS"},
+		{[]string{"mssql", "dibi_test", "dbo", "Tables", "orders"}, "dbo.orders"},
 		{[]string{"csv", "sales_2026"}, "sales_2026"},
 	} {
 		it := p.item(c.path...)
@@ -346,6 +347,55 @@ func runAutopilot(a *App) {
 	p.wait("mysql rerun", func() bool { return !mt.running })
 	p.check(strings.Contains(p.messages(mt), "1 row(s) fetched"), "temp table still there after Stop: %s", strings.TrimSpace(p.messages(mt)))
 
+	p.log("== SQL Server")
+	if t := p.openInfo("mssql", "dibi_test", "dbo", "Tables", "orders"); t != nil {
+		tabs := p.innerTabs(t)
+		p.check(strings.Join(tabs, ",") == "Columns,Constraints,Indexes,"+previewTab, "info sub-tabs: %v", tabs)
+		p.shot("12-mssql-columns")
+		p.selectInner(t, "Constraints")
+		p.shot("13-mssql-constraints")
+		p.selectInner(t, previewTab)
+		p.wait("preview", func() bool { return t.data != nil && t.data.pager != nil })
+		p.check(p.page() != "", "preview page label: %q", p.page())
+	}
+	if t := p.openInfo("mssql", "dibi_test", "dbo", "Procedures", "touch"); t != nil {
+		p.selectInner(t, "Source")
+		p.shot("14-mssql-procedure")
+	}
+	onUIWait(func() { a.setLastUsed("mssql", "dibi_test") })
+	sst := p.runScript("DECLARE @n INT = 2;\nSELECT TOP (@n) id, name, email, NEWID() AS guid, SYSDATETIMEOFFSET() AS ts\nFROM customers ORDER BY id;\n" +
+		"SELECT @n AS n\nGO\nUPDATE orders SET amount = amount\nGO\nEXEC touch")
+	p.log("  messages:\n%s", indent(p.messages(sst)))
+	p.check(ui(func() bool { return sst.conn == "mssql" && sst.database == "dibi_test" }), "script bound to mssql/dibi_test (got %s/%s)", sst.conn, sst.database)
+	p.check(ui(func() int { return len(sst.views) }) == 3, "three result tabs (two result sets, then EXEC)")
+	p.check(strings.Contains(p.messages(sst), "Result set 2: 1 row(s)"), "second result set reported")
+	p.check(strings.Contains(p.messages(sst), "[2] 1 row(s) affected"), "rows affected by the UPDATE batch")
+	onUIWait(func() { sst.results.SetCurrentIndex(0) })
+	p.shot("15-mssql-script")
+
+	mst := p.runScript("SELECT 1\nGO\nSELECT * FORM customers")
+	p.check(strings.Contains(p.messages(mst), "Incorrect syntax near 'FORM'"), "error shown in messages")
+	cursor = ui(func() int { return mst.editor.TextCursor().Position() })
+	p.check(cursor == len("SELECT 1\nGO\nSELECT * "), "cursor moved to the error (pos %d)", cursor)
+	p.shot("16-mssql-error")
+
+	p.log("== SQL Server: Stop keeps the session")
+	kt := p.runScript("CREATE TABLE #tmp_x (a INT); INSERT INTO #tmp_x VALUES (1), (2)")
+	onUIWait(func() {
+		kt.editor.SetPlainText("WAITFOR DELAY '00:00:30'")
+		a.run()
+	})
+	time.Sleep(700 * time.Millisecond)
+	onUIWait(func() { a.stop() })
+	p.wait("mssql cancel", func() bool { return !kt.running })
+	p.check(strings.Contains(p.status(), "cancelled"), "status: %s", p.status())
+	onUIWait(func() {
+		kt.editor.SetPlainText("SELECT COUNT(*) AS n FROM #tmp_x")
+		a.run()
+	})
+	p.wait("mssql rerun", func() bool { return !kt.running })
+	p.check(strings.Contains(p.messages(kt), "1 row(s) fetched"), "temp table still there after Stop: %s", strings.TrimSpace(p.messages(kt)))
+
 	p.log("== Dialogs")
 	go func() {
 		time.Sleep(800 * time.Millisecond)
@@ -357,6 +407,16 @@ func runAutopilot(a *App) {
 		})
 	}()
 	onUIWait(a.newConnection)
+	go func() {
+		time.Sleep(800 * time.Millisecond)
+		p.shot("10-edit-mssql-connection")
+		onUIWait(func() {
+			if w := qt.QApplication_ActiveModalWidget(); w != nil {
+				w.Close()
+			}
+		})
+	}()
+	onUIWait(func() { a.editConnection("mssql") })
 	onUIWait(func() { a.setLastUsed("pg", "dibi") })
 	p.runScript("SELECT * FROM dibi_test.orders")
 	go func() {

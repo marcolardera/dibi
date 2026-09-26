@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"dibi/internal/config"
+	"dibi/internal/pager"
 	"dibi/internal/sqlsplit"
 )
 
@@ -108,6 +109,38 @@ END;`,
 			path:   []string{"DIBI", "Tables"},
 			upper:  true,
 			routes: map[Kind]string{KindFunction: "ADD_ONE", KindProcedure: "TOUCH", KindPackage: "PKG", KindSequence: "ORDER_SEQ"},
+		},
+		{
+			conn: config.Connection{Name: "mssql", Type: config.MSSQL, Host: "localhost", Port: 1433,
+				User: "sa", Password: "Dibi_pass1"},
+			setup: `IF DB_ID('dibi_test') IS NOT NULL BEGIN
+  ALTER DATABASE dibi_test SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+  DROP DATABASE dibi_test;
+END
+GO
+CREATE DATABASE dibi_test
+GO
+USE dibi_test
+GO
+` + strings.NewReplacer("CREATE VIEW", "GO\nCREATE VIEW", "INSERT INTO customers VALUES (1", "GO\nINSERT INTO customers VALUES (1").Replace(commonTables) + `
+GO
+CREATE SEQUENCE order_seq START WITH 100
+GO
+CREATE FUNCTION add_one(@x INT) RETURNS INT AS BEGIN RETURN @x + 1 END
+GO
+CREATE PROCEDURE touch AS
+BEGIN
+  DECLARE @v INT;
+  SET @v = 1;
+  IF @v = 1 SELECT 1;
+END
+GO
+CREATE TRIGGER orders_trg ON orders AFTER INSERT AS
+BEGIN
+  SET NOCOUNT ON;
+END`,
+			path:   []string{"dibi_test", "dbo", "Tables"},
+			routes: map[Kind]string{KindFunction: "add_one", KindProcedure: "touch", KindSequence: "order_seq"},
 		},
 	}
 }
@@ -353,6 +386,10 @@ func testSession(t *testing.T, ctx context.Context, src *Source, f fixture) {
 		t.Fatalf("session query: n=%d err=%v", n, err)
 	}
 
+	if f.conn.Type == config.MSSQL {
+		testResultSets(t, ctx, sess)
+	}
+
 	// Cancel a slow query; the session must be usable (or reported dead).
 	slow := map[config.Type]string{
 		config.Postgres: "SELECT pg_sleep(10)",
@@ -361,6 +398,7 @@ func testSession(t *testing.T, ctx context.Context, src *Source, f fixture) {
 		config.Oracle:   "SELECT COUNT(*) FROM all_objects a, all_objects b WHERE a.object_id + b.object_id < 0",
 		config.SQLite:   "WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c) SELECT count(*) FROM c",
 		config.DuckDB:   "SELECT count(*) FROM range(100000000) a, range(1000) b WHERE a.range % 997 = b.range",
+		config.MSSQL:    "WAITFOR DELAY '00:00:10'",
 	}[f.conn.Type]
 	cctx, ccancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	start := time.Now()
@@ -376,6 +414,36 @@ func testSession(t *testing.T, ctx context.Context, src *Source, f fixture) {
 	}
 	if time.Since(start) > 5*time.Second {
 		t.Errorf("cancellation took %v", time.Since(start))
+	}
+}
+
+// testResultSets reads every result set of a batch through pagers; a
+// statement without rows between them does not produce a result set.
+func testResultSets(t *testing.T, ctx context.Context, sess *Session) {
+	p, err := pager.New(ctx, sess, "DECLARE @x INT = 2\nSELECT 1 AS a\nUPDATE orders SET amount = amount\nSELECT @x AS b, 3 AS c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for p != nil {
+		rows, err := p.Page(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, c := range p.Cols {
+			names = append(names, c.Name())
+		}
+		got = append(got, fmt.Sprintf("%s=%v", strings.Join(names, ","), rows))
+		next, err := p.NextResult()
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.Close() // must not close the cursor handed to next
+		p = next
+	}
+	if want := []string{"a=[[1]]", "b,c=[[2 3]]"}; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("result sets: got %v, want %v", got, want)
 	}
 }
 
