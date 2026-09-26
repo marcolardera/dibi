@@ -1,0 +1,120 @@
+package db
+
+import (
+	"regexp"
+	"strings"
+
+	"dibi/internal/config"
+)
+
+// QualifiedName returns the reference to a table, view or materialized
+// view as it would be typed in a query on this connection: qualified with
+// its schema (or database), and quoted only where needed. It returns ""
+// for other kinds of nodes.
+func (s *Source) QualifiedName(n Node) string {
+	switch n.Kind {
+	case KindTable, KindView, KindMatView:
+	default:
+		return ""
+	}
+	q := identQuoter(s.Conn.Type)
+	switch s.Conn.Type {
+	case config.Postgres, config.Oracle, config.DuckDB:
+		return q(n.Schema) + "." + q(n.Object)
+	case config.MySQL, config.MariaDB:
+		return q(n.Database) + "." + q(n.Object)
+	case config.SQLite:
+		if n.Database != "" && n.Database != "main" {
+			return q(n.Database) + "." + q(n.Object)
+		}
+	}
+	return q(n.Object)
+}
+
+var (
+	lowerIdent = regexp.MustCompile(`^[a-z_][a-z0-9_$]*$`)
+	upperIdent = regexp.MustCompile(`^[A-Z][A-Z0-9_$#]*$`)
+	anyIdent   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	mysqlIdent = regexp.MustCompile(`^[A-Za-z0-9_$]*[A-Za-z_$][A-Za-z0-9_$]*$`)
+)
+
+// identQuoter returns a function quoting an identifier only when it would
+// not be read back unchanged unquoted: case folding (Postgres folds to lower
+// case, Oracle to upper case), special characters and reserved words.
+func identQuoter(t config.Type) func(string) string {
+	switch t {
+	case config.Postgres:
+		return func(s string) string {
+			if lowerIdent.MatchString(s) && !pgReserved[strings.ToUpper(s)] {
+				return s
+			}
+			return quoteDouble(s)
+		}
+	case config.Oracle:
+		return func(s string) string {
+			if upperIdent.MatchString(s) && !oracleReserved[s] {
+				return s
+			}
+			return quoteDouble(s)
+		}
+	case config.MySQL, config.MariaDB:
+		return func(s string) string {
+			if mysqlIdent.MatchString(s) && !mysqlReserved[strings.ToUpper(s)] {
+				return s
+			}
+			return quoteBacktick(s)
+		}
+	}
+	// SQLite, DuckDB and file views are case-insensitive but keep case.
+	return func(s string) string {
+		if anyIdent.MatchString(s) && !sqlReserved[strings.ToUpper(s)] {
+			return s
+		}
+		return quoteDouble(s)
+	}
+}
+
+// Reserved words that cannot be used as unquoted table names.
+var (
+	pgReserved = words(`ALL ANALYSE ANALYZE AND ANY ARRAY AS ASC ASYMMETRIC AUTHORIZATION BINARY BOTH
+		CASE CAST CHECK COLLATE COLLATION COLUMN CONCURRENTLY CONSTRAINT CREATE CROSS CURRENT_CATALOG
+		CURRENT_DATE CURRENT_ROLE CURRENT_SCHEMA CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER DEFAULT
+		DEFERRABLE DESC DISTINCT DO ELSE END EXCEPT FALSE FETCH FOR FOREIGN FREEZE FROM FULL GRANT
+		GROUP HAVING ILIKE IN INITIALLY INNER INTERSECT INTO IS ISNULL JOIN LATERAL LEADING LEFT LIKE
+		LIMIT LOCALTIME LOCALTIMESTAMP NATURAL NOT NOTNULL NULL OFFSET ON ONLY OR ORDER OUTER
+		OVERLAPS PLACING PRIMARY REFERENCES RETURNING RIGHT SELECT SESSION_USER SIMILAR SOME
+		SYMMETRIC SYSTEM_USER TABLE TABLESAMPLE THEN TO TRAILING TRUE UNION UNIQUE USER USING
+		VARIADIC VERBOSE WHEN WHERE WINDOW WITH`)
+	oracleReserved = words(`ACCESS ADD ALL ALTER AND ANY AS ASC AUDIT BETWEEN BY CHAR CHECK CLUSTER
+		COLUMN COMMENT COMPRESS CONNECT CREATE CURRENT DATE DECIMAL DEFAULT DELETE DESC DISTINCT DROP
+		ELSE EXCLUSIVE EXISTS FILE FLOAT FOR FROM GRANT GROUP HAVING IDENTIFIED IMMEDIATE IN INCREMENT
+		INDEX INITIAL INSERT INTEGER INTERSECT INTO IS LEVEL LIKE LOCK LONG MAXEXTENTS MINUS MLSLABEL
+		MODE MODIFY NOAUDIT NOCOMPRESS NOT NOWAIT NULL NUMBER OF OFFLINE ON ONLINE OPTION OR ORDER
+		PCTFREE PRIOR PUBLIC RAW RENAME RESOURCE REVOKE ROW ROWID ROWNUM ROWS SELECT SESSION SET
+		SHARE SIZE SMALLINT START SUCCESSFUL SYNONYM SYSDATE TABLE THEN TO TRIGGER UID UNION UNIQUE
+		UPDATE USER VALIDATE VALUES VARCHAR VARCHAR2 VIEW WHENEVER WHERE WITH`)
+	mysqlReserved = words(`ADD ALL ALTER ANALYZE AND AS ASC BETWEEN BIGINT BINARY BLOB BOTH BY CALL
+		CASCADE CASE CHANGE CHAR CHARACTER CHECK COLLATE COLUMN CONDITION CONSTRAINT CONTINUE CONVERT
+		CREATE CROSS CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR DATABASE
+		DATABASES DECIMAL DECLARE DEFAULT DELETE DESC DESCRIBE DISTINCT DIV DOUBLE DROP DUAL EACH ELSE
+		ELSEIF EXISTS EXIT EXPLAIN FALSE FETCH FLOAT FOR FORCE FOREIGN FROM FULLTEXT GRANT GROUP GROUPS
+		HAVING IF IGNORE IN INDEX INNER INSERT INT INTEGER INTERVAL INTO IS JOIN KEY KEYS KILL LEADING
+		LEAVE LEFT LIKE LIMIT LINES LOAD LOCK LONG LOOP MATCH MOD NATURAL NOT NULL NUMERIC ON OPTION OR
+		ORDER OUT OUTER OVER PARTITION PRIMARY PROCEDURE RANGE READ REAL REFERENCES REGEXP RELEASE
+		RENAME REPEAT REPLACE REQUIRE RESTRICT RETURN REVOKE RIGHT RLIKE ROW ROWS SCHEMA SCHEMAS SELECT
+		SET SHOW SMALLINT SPATIAL SQL TABLE THEN TO TRAILING TRIGGER TRUE UNION UNIQUE UNLOCK UNSIGNED
+		UPDATE USAGE USE USING VALUES VARCHAR WHEN WHERE WHILE WINDOW WITH WRITE XOR`)
+	sqlReserved = words(`ALL AND AS ASC BETWEEN BY CASE CAST CHECK COLLATE COLUMN CONSTRAINT CREATE
+		CROSS DEFAULT DELETE DESC DISTINCT DROP ELSE END EXCEPT EXISTS FOREIGN FROM FULL GROUP HAVING
+		IN INDEX INNER INSERT INTERSECT INTO IS JOIN LEFT LIKE LIMIT NATURAL NOT NULL OFFSET ON OR
+		ORDER OUTER PRIMARY REFERENCES RIGHT SELECT SET TABLE THEN TO TRANSACTION UNION UNIQUE UPDATE
+		USING VALUES WHEN WHERE WITH`)
+)
+
+func words(s string) map[string]bool {
+	m := map[string]bool{}
+	for _, w := range strings.Fields(s) {
+		m[w] = true
+	}
+	return m
+}

@@ -10,6 +10,9 @@ import (
 	qt "github.com/mappu/miqt/qt6"
 )
 
+// previewTab is the title of the data preview sub-tab.
+const previewTab = "Data preview"
+
 // infoTab shows the details of a database object: columns, constraints,
 // indexes, source code and a data preview.
 type infoTab struct {
@@ -123,7 +126,7 @@ func (t *infoTab) build(info *db.Info) {
 		t.data.src, t.data.database = t.src, t.node.Database
 		t.data.exportQuery = info.SelectAll
 		t.data.exportNote = "All rows of " + t.node.Name + " are exported, not only the preview."
-		t.inner.AddTab(t.data.widget(), "Data")
+		t.inner.AddTab(t.data.widget(), previewTab)
 		t.loadPreview(info.Preview)
 	}
 	if t.inner.Count() == 0 {
@@ -159,7 +162,7 @@ func (t *infoTab) loadPreview(query string) {
 			msg.SetReadOnly(true)
 			msg.AppendHtml(errorHTML("Cannot load the data preview: ", r.err.Error()))
 			t.inner.RemoveTab(idx)
-			t.inner.InsertTab(idx, msg.QWidget, "Data")
+			t.inner.InsertTab(idx, msg.QWidget, previewTab)
 			t.data = nil
 			return
 		}

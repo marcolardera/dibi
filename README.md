@@ -18,6 +18,8 @@ See [spec.md](spec.md) for the full specification.
 - Information panel: columns (type, nullability, key, default, comment),
   constraints, indexes, source code of views/routines/triggers, and a
   50-row data preview.
+- `Ctrl+C` on a table or view in the tree copies its query-ready name
+  (e.g. `schema.table`, quoted where needed).
 - SQL editor with syntax highlighting. **Run** (`Ctrl+Enter`) executes the
   selection, or the whole script statement by statement; each result set
   gets its own tab. Each editor tab has its own database session.

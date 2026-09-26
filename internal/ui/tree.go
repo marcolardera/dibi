@@ -38,7 +38,32 @@ func newObjectTree(app *App) *objectTree {
 	w.OnItemExpanded(t.expand)
 	w.OnItemClicked(func(item *qt.QTreeWidgetItem, _ int) { t.activate(item) })
 	w.OnCustomContextMenuRequested(t.contextMenu)
+
+	// Ctrl+C copies the reference of the selected table or view.
+	copyAct := qt.NewQAction5("Copy Name", w.QObject)
+	copyAct.SetShortcut(qt.NewQKeySequence6(qt.QKeySequence__Copy))
+	copyAct.SetShortcutContext(qt.WidgetShortcut)
+	copyAct.OnTriggered(func() { t.copyName(w.CurrentItem()) })
+	w.AddAction(copyAct)
 	return t
+}
+
+// copyName copies the qualified, query-ready name of a table or view.
+func (t *objectTree) copyName(item *qt.QTreeWidgetItem) {
+	e := t.entry(item)
+	if e == nil {
+		return
+	}
+	src := t.app.source(e.conn)
+	if src == nil {
+		return
+	}
+	name := src.QualifiedName(e.node)
+	if name == "" {
+		return
+	}
+	qt.QGuiApplication_Clipboard().SetText(name)
+	t.app.setStatus("Copied " + name)
 }
 
 func connIcon(typ config.Type) *qt.QIcon {
@@ -228,6 +253,9 @@ func (t *objectTree) contextMenu(pos *qt.QPoint) {
 	})
 	if e.node.Kind == db.KindTable || e.node.Kind == db.KindView || e.node.Kind == db.KindMatView {
 		add("Open Info Panel", func() { t.app.openInfo(conn, e.node) })
+		copyAct := menu.QWidget.AddActionWithText("Copy Name")
+		copyAct.SetShortcut(qt.NewQKeySequence6(qt.QKeySequence__Copy)) // shown as a hint
+		copyAct.OnTriggered(func() { t.copyName(item) })
 	}
 	if e.node.HasChildren() {
 		add("Refresh", func() { t.refresh(item) })

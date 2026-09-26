@@ -180,16 +180,44 @@ func runAutopilot(a *App) {
 	t := p.openInfo("pg", "dibi", "dibi_test", "Tables", "orders")
 	if t != nil {
 		tabs := p.innerTabs(t)
-		p.check(strings.Join(tabs, ",") == "Columns,Constraints,Indexes,Data", "info sub-tabs: %v", tabs)
+		p.check(strings.Join(tabs, ",") == "Columns,Constraints,Indexes,"+previewTab, "info sub-tabs: %v", tabs)
 		p.shot("02-pg-columns")
 		p.selectInner(t, "Constraints")
 		p.shot("03-pg-constraints")
-		p.selectInner(t, "Data")
+		p.selectInner(t, previewTab)
 		p.wait("preview", func() bool { return t.data != nil && t.data.pager != nil })
 		p.check(p.page() != "", "preview page label: %q", p.page())
 		p.shot("04-pg-data")
 	}
 	p.check(ui(func() bool { return a.lastConn == "pg" && a.lastDB == "dibi" }), "last used = pg/dibi (got %s/%s)", a.lastConn, a.lastDB)
+
+	p.log("== Ctrl+C on a tree item copies the table reference")
+	for _, c := range []struct {
+		path []string
+		want string
+	}{
+		{[]string{"pg", "dibi", "dibi_test", "Tables", "orders"}, "dibi_test.orders"},
+		{[]string{"mysql", "dibi_test", "Views", "v_orders"}, "dibi_test.v_orders"},
+		{[]string{"oracle", "DIBI", "Tables", "CUSTOMERS"}, "DIBI.CUSTOMERS"},
+		{[]string{"csv", "sales_2026"}, "sales_2026"},
+	} {
+		it := p.item(c.path...)
+		if it == nil {
+			continue
+		}
+		onUIWait(func() {
+			qt.QGuiApplication_Clipboard().SetText("")
+			a.tree.widget.SetFocus()
+			a.tree.widget.SetCurrentItem(it)
+			// Send a real Ctrl+C key press to the tree.
+			ev := qt.NewQKeyEvent(qt.QEvent__KeyPress, int(qt.Key_C), qt.ControlModifier)
+			qt.QCoreApplication_SendEvent(a.tree.widget.QObject, ev.QEvent)
+		})
+		got := ui(func() string { return qt.QGuiApplication_Clipboard().Text() })
+		p.check(got == c.want, "%s → %q", strings.Join(c.path, "/"), got)
+	}
+	// Browsing the tree changed the last used connection; go back to pg.
+	p.openInfo("pg", "dibi", "dibi_test", "Tables", "orders")
 
 	p.log("== New script defaults to the last used connection")
 	st := p.runScript("SELECT id, name, email FROM dibi_test.customers ORDER BY id;\n" +
@@ -276,8 +304,8 @@ func runAutopilot(a *App) {
 		{"oracle", "Source", []string{"oracle", "DIBI", "Packages", "PKG"}},
 		{"oracle", "Indexes", []string{"oracle", "DIBI", "Tables", "ORDERS"}},
 		{"sqlite", "Source", []string{"sqlite", "main", "Tables", "orders", "orders_trg"}},
-		{"duckdb", "Data", []string{"duckdb", "test", "main", "Tables", "orders"}},
-		{"csv", "Data", []string{"csv", "sales_2026"}},
+		{"duckdb", previewTab, []string{"duckdb", "test", "main", "Tables", "orders"}},
+		{"csv", previewTab, []string{"csv", "sales_2026"}},
 		{"parquet", "Columns", []string{"parquet", "events"}},
 	} {
 		t := p.openInfo(c.path...)
@@ -285,7 +313,7 @@ func runAutopilot(a *App) {
 			continue
 		}
 		ok := p.selectInner(t, c.sub)
-		if c.sub == "Data" {
+		if c.sub == previewTab {
 			p.wait("preview", func() bool { return t.data != nil && t.data.pager != nil })
 		}
 		p.check(ok, "%s: %s tab (%v) · %s", c.name, c.sub, p.innerTabs(t), ui(func() string { return t.title.Text() }))
