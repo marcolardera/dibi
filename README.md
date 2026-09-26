@@ -64,6 +64,7 @@ docker run -d --name dibi-pg -p 5433:5432 -e POSTGRES_USER=dibi -e POSTGRES_PASS
 docker run -d --name dibi-mariadb -p 3307:3306 -e MARIADB_ROOT_PASSWORD=dibi -e MARIADB_DATABASE=dibi mariadb:11
 docker run -d --name dibi-mysql -p 3308:3306 -e MYSQL_ROOT_PASSWORD=dibi -e MYSQL_DATABASE=dibi mysql:8.4
 docker run -d --name dibi-oracle -p 1521:1521 -e ORACLE_PASSWORD=dibi -e APP_USER=dibi -e APP_USER_PASSWORD=dibi gvenzl/oracle-free:slim
+docker run -d --name dibi-mssql -p 1433:1433 -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=Dibi_pass1 mcr.microsoft.com/mssql/server:2022-latest
 ```
 
 `make autopilot` builds a variant of the app that drives its own UI through
