@@ -26,6 +26,12 @@ func (mysqlDialect) open(c config.Connection, _ string) (*sql.DB, error) {
 	cfg.Addr = net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
 	cfg.DBName = c.Database
 	cfg.ParseTime = true
+	tlsCfg, err := tlsConfig(c, c.Host)
+	if err != nil {
+		return nil, err
+	}
+	cfg.TLS = tlsCfg
+	cfg.AllowFallbackToPlaintext = c.TLSMode() == config.SSLPrefer
 	conn, err := mysql.NewConnector(cfg)
 	if err != nil {
 		return nil, err

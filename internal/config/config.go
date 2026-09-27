@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -81,12 +82,62 @@ func (t Type) DefaultPort() int {
 	return 0
 }
 
+// SSLMode says whether a server connection uses TLS and how much of the
+// server certificate is checked. The names follow libpq's sslmode.
+type SSLMode string
+
+const (
+	SSLDisable    SSLMode = "disable"     // never use TLS
+	SSLPrefer     SSLMode = "prefer"      // use TLS if the server supports it, without checks
+	SSLRequire    SSLMode = "require"     // always use TLS, without checks
+	SSLVerifyCA   SSLMode = "verify-ca"   // also check that a trusted CA signed the certificate
+	SSLVerifyFull SSLMode = "verify-full" // also check that the certificate names the host
+)
+
+// Label returns the human-readable name of an SSL mode.
+func (m SSLMode) Label() string {
+	switch m {
+	case SSLDisable:
+		return "Disable"
+	case SSLPrefer:
+		return "Prefer"
+	case SSLRequire:
+		return "Require"
+	case SSLVerifyCA:
+		return "Verify CA"
+	case SSLVerifyFull:
+		return "Verify full"
+	}
+	return string(m)
+}
+
+// Verifies reports whether the mode checks the server certificate.
+func (m SSLMode) Verifies() bool { return m == SSLVerifyCA || m == SSLVerifyFull }
+
+// SSLModes returns the SSL modes a server type supports; the first is the
+// default. Oracle has no "prefer": TLS (TCPS) is served by its own listener.
+func (t Type) SSLModes() []SSLMode {
+	switch {
+	case t.IsFile():
+		return nil
+	case t == Oracle:
+		return []SSLMode{SSLDisable, SSLRequire, SSLVerifyCA, SSLVerifyFull}
+	}
+	return []SSLMode{SSLPrefer, SSLDisable, SSLRequire, SSLVerifyCA, SSLVerifyFull}
+}
+
 // Connection holds the parameters of a saved connection.
 //
 // For Oracle, Database is the service name. For SQL Server, Host may name
-// an instance (host\instance, the port is then ignored), an empty User means
-// integrated (Windows/Kerberos) authentication, and Encrypt/TrustServerCert
-// set the TLS mode. In v1 the password is stored in plaintext.
+// an instance (host\instance, the port is then ignored) and an empty User
+// means integrated (Windows/Kerberos) authentication. In v1 the password is
+// stored in plaintext.
+//
+// SSLMode sets TLS (empty means the type's default). SSLRootCert is a PEM
+// file of trusted CAs, checked instead of the system ones by the verify
+// modes. SSLCert and SSLKey are a client certificate and its key (PEM).
+// Wallet is an Oracle wallet folder: its cwallet.sso provides both the
+// trusted CAs and the client certificate.
 type Connection struct {
 	Name     string `yaml:"name"`
 	Type     Type   `yaml:"type"`
@@ -97,8 +148,22 @@ type Connection struct {
 	Password string `yaml:"password,omitempty"`
 	Path     string `yaml:"path,omitempty"`
 
-	Encrypt         bool `yaml:"encrypt,omitempty"`
-	TrustServerCert bool `yaml:"trust_server_certificate,omitempty"`
+	SSLMode     SSLMode `yaml:"ssl_mode,omitempty"`
+	SSLRootCert string  `yaml:"ssl_root_cert,omitempty"`
+	SSLCert     string  `yaml:"ssl_cert,omitempty"`
+	SSLKey      string  `yaml:"ssl_key,omitempty"`
+	Wallet      string  `yaml:"wallet,omitempty"`
+}
+
+// TLSMode returns the SSL mode in effect: SSLMode, or the type's default.
+func (c *Connection) TLSMode() SSLMode {
+	if c.SSLMode != "" {
+		return c.SSLMode
+	}
+	if modes := c.Type.SSLModes(); len(modes) > 0 {
+		return modes[0]
+	}
+	return SSLDisable
 }
 
 // Validate checks that the fields required by the connection type are set.
@@ -123,6 +188,12 @@ func (c *Connection) Validate() error {
 	}
 	if c.Type == Oracle && c.Database == "" {
 		return errors.New("service name is required")
+	}
+	if c.SSLMode != "" && !slices.Contains(c.Type.SSLModes(), c.SSLMode) {
+		return fmt.Errorf("SSL mode %q is not supported by %s", c.SSLMode, c.Type.Label())
+	}
+	if (c.SSLCert == "") != (c.SSLKey == "") {
+		return errors.New("the client certificate and its key must be given together")
 	}
 	return nil
 }
@@ -201,17 +272,35 @@ func (s *Store) Connections() ([]Connection, error) {
 			errs = append(errs, err)
 			continue
 		}
-		var c Connection
+		var c legacyConnection
 		if err := yaml.Unmarshal(data, &c); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", e.Name(), err))
 			continue
 		}
-		conns = append(conns, c)
+		conns = append(conns, c.upgrade())
 	}
 	sort.Slice(conns, func(i, j int) bool {
 		return strings.ToLower(conns[i].Name) < strings.ToLower(conns[j].Name)
 	})
 	return conns, errors.Join(errs...)
+}
+
+// legacyConnection reads the SQL Server TLS options that preceded SSLMode.
+type legacyConnection struct {
+	Connection      `yaml:",inline"`
+	Encrypt         bool `yaml:"encrypt,omitempty"`
+	TrustServerCert bool `yaml:"trust_server_certificate,omitempty"`
+}
+
+func (l legacyConnection) upgrade() Connection {
+	c := l.Connection
+	if c.SSLMode == "" && l.Encrypt {
+		c.SSLMode = SSLVerifyFull
+		if l.TrustServerCert {
+			c.SSLMode = SSLRequire
+		}
+	}
+	return c
 }
 
 // SaveConnection writes a connection. If oldName is set and differs from the

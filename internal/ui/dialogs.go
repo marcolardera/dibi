@@ -41,11 +41,20 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 	user := qt.NewQLineEdit2()
 	password := qt.NewQLineEdit2()
 	password.SetEchoMode(qt.QLineEdit__Password)
-	encrypt := qt.NewQCheckBox3("Encrypt connection")
-	trustCert := qt.NewQCheckBox3("Trust server certificate")
-	trustCert.SetToolTip("Accept a self-signed or otherwise unverified server certificate")
-	tlsRow := qt.NewQWidget2()
-	tlsRow.SetLayout(hbox(encrypt.QWidget, trustCert.QWidget).QLayout)
+	sslMode := qt.NewQComboBox2()
+	sslMode.SetToolTip("Disable: never use TLS.\n" +
+		"Prefer: use TLS if the server supports it, without checking its certificate.\n" +
+		"Require: always use TLS, without checking the certificate (accepts a self-signed one).\n" +
+		"Verify CA: also check that the certificate is signed by a trusted CA.\n" +
+		"Verify full: also check that the certificate names the host.")
+	rootCert, rootCertRow := fileField(dlg.QWidget, "Choose CA Certificate", "Certificates (*.pem *.crt *.cer);;All files (*)")
+	rootCert.SetPlaceholderText("system CAs")
+	clientCert, clientCertRow := fileField(dlg.QWidget, "Choose Client Certificate", "Certificates (*.pem *.crt *.cer);;All files (*)")
+	clientCert.SetPlaceholderText("none")
+	clientKey, clientKeyRow := fileField(dlg.QWidget, "Choose Client Key", "Keys (*.pem *.key);;All files (*)")
+	clientKey.SetPlaceholderText("none")
+	wallet, walletRow := fileField(dlg.QWidget, "Choose Wallet Folder", "")
+	wallet.SetPlaceholderText("folder with cwallet.sso")
 	path := qt.NewQLineEdit2()
 	browse := qt.NewQPushButton3("Browse…")
 	pathRow := qt.NewQWidget2()
@@ -62,8 +71,14 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 	form.AddRow(dbLabel.QWidget, database.QWidget)
 	form.AddRow(userLabel.QWidget, user.QWidget)
 	form.AddRow(pwLabel.QWidget, password.QWidget)
-	tlsLabel := qt.NewQLabel3("Security:")
-	form.AddRow(tlsLabel.QWidget, tlsRow)
+	sslLabel, rootCertLabel, clientCertLabel, clientKeyLabel, walletLabel :=
+		qt.NewQLabel3("SSL mode:"), qt.NewQLabel3("CA certificate:"), qt.NewQLabel3("Client certificate:"),
+		qt.NewQLabel3("Client key:"), qt.NewQLabel3("Wallet:")
+	form.AddRow(sslLabel.QWidget, sslMode.QWidget)
+	form.AddRow(rootCertLabel.QWidget, rootCertRow)
+	form.AddRow(clientCertLabel.QWidget, clientCertRow)
+	form.AddRow(clientKeyLabel.QWidget, clientKeyRow)
+	form.AddRow(walletLabel.QWidget, walletRow)
 	form.AddRow(pathLabel.QWidget, pathRow)
 
 	status := qt.NewQLabel2()
@@ -78,6 +93,34 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 	layout.AddWidget(buttons.QWidget)
 
 	currentType := func() config.Type { return config.Type(typeCombo.CurrentData().ToString()) }
+	currentSSL := func() config.SSLMode { return config.SSLMode(sslMode.CurrentData().ToString()) }
+	// updateSSL shows the TLS fields that apply to the type and SSL mode.
+	updateSSL := func() {
+		t, mode := currentType(), currentSSL()
+		server, useTLS := !t.IsFile(), !t.IsFile() && mode != config.SSLDisable
+		sslLabel.SetVisible(server)
+		sslMode.SetVisible(server)
+		for _, w := range []*qt.QWidget{rootCertLabel.QWidget, rootCertRow} {
+			w.SetVisible(useTLS && mode.Verifies())
+		}
+		// SQL Server has no client certificate authentication.
+		for _, w := range []*qt.QWidget{clientCertLabel.QWidget, clientCertRow, clientKeyLabel.QWidget, clientKeyRow} {
+			w.SetVisible(useTLS && t != config.MSSQL)
+		}
+		walletLabel.SetVisible(useTLS && t == config.Oracle)
+		walletRow.SetVisible(useTLS && t == config.Oracle)
+		dlg.AdjustSize()
+	}
+	// setSSLModes lists the modes of the type and selects want, or the default
+	// if the type does not support it.
+	setSSLModes := func(want config.SSLMode) {
+		sslMode.Clear()
+		for _, m := range currentType().SSLModes() {
+			sslMode.AddItem3(m.Label(), qt.NewQVariant14(string(m)))
+		}
+		sslMode.SetCurrentIndex(max(sslMode.FindData(qt.NewQVariant14(string(want))), 0))
+	}
+	sslMode.OnActivated(func(int) { updateSSL() })
 	serverRows := []*qt.QWidget{hostLabel.QWidget, host.QWidget, portLabel.QWidget, port.QWidget,
 		dbLabel.QWidget, database.QWidget, userLabel.QWidget, user.QWidget, pwLabel.QWidget, password.QWidget}
 	fileRows := []*qt.QWidget{pathLabel.QWidget, pathRow}
@@ -89,8 +132,12 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 		for _, w := range fileRows {
 			w.SetVisible(t.IsFile())
 		}
-		tlsLabel.SetVisible(t == config.MSSQL)
-		tlsRow.SetVisible(t == config.MSSQL)
+		if resetPort {
+			setSSLModes("")
+		} else {
+			setSSLModes(currentSSL())
+		}
+		updateSSL()
 		if t == config.Oracle {
 			dbLabel.SetText("Service name:")
 		} else {
@@ -140,8 +187,17 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 			c.Database = strings.TrimSpace(database.Text())
 			c.User = strings.TrimSpace(user.Text())
 			c.Password = password.Text()
-			if c.Type == config.MSSQL {
-				c.Encrypt, c.TrustServerCert = encrypt.IsChecked(), trustCert.IsChecked()
+			c.SSLMode = currentSSL()
+			if c.SSLMode != config.SSLDisable {
+				if c.SSLMode.Verifies() {
+					c.SSLRootCert = strings.TrimSpace(rootCert.Text())
+				}
+				if c.Type != config.MSSQL {
+					c.SSLCert, c.SSLKey = strings.TrimSpace(clientCert.Text()), strings.TrimSpace(clientKey.Text())
+				}
+				if c.Type == config.Oracle {
+					c.Wallet = strings.TrimSpace(wallet.Text())
+				}
 			}
 		}
 		return c
@@ -212,9 +268,12 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 		database.SetText(existing.Database)
 		user.SetText(existing.User)
 		password.SetText(existing.Password)
-		encrypt.SetChecked(existing.Encrypt)
-		trustCert.SetChecked(existing.TrustServerCert)
+		rootCert.SetText(existing.SSLRootCert)
+		clientCert.SetText(existing.SSLCert)
+		clientKey.SetText(existing.SSLKey)
+		wallet.SetText(existing.Wallet)
 		path.SetText(existing.Path)
+		setSSLModes(existing.TLSMode())
 		updateFields(false)
 	} else {
 		host.SetText("localhost")
@@ -223,6 +282,28 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 	name.SetFocus()
 	dlg.Exec()
 	return result, saved
+}
+
+// fileField returns a line edit for a path with a Browse button, and the row
+// holding both. An empty filter chooses a folder.
+func fileField(parent *qt.QWidget, caption, filter string) (*qt.QLineEdit, *qt.QWidget) {
+	edit := qt.NewQLineEdit2()
+	browse := qt.NewQPushButton3("Browse…")
+	browse.OnClicked(func() {
+		dir := filepath.Dir(edit.Text())
+		var f string
+		if filter == "" {
+			f = qt.QFileDialog_GetExistingDirectory3(parent, caption, edit.Text())
+		} else {
+			f = qt.QFileDialog_GetOpenFileName4(parent, caption, dir, filter)
+		}
+		if f != "" {
+			edit.SetText(f)
+		}
+	})
+	row := qt.NewQWidget2()
+	row.SetLayout(hbox(edit.QWidget, browse.QWidget).QLayout)
+	return edit, row
 }
 
 // exportDialog asks for export options. It returns false if cancelled.

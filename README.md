@@ -29,6 +29,8 @@ See [spec.md](spec.md) for the full specification.
 - Copy cells with `Ctrl+C` (full values, tab-separated).
 - Export to CSV or XLSX (re-runs the query and streams all rows).
 - Saved queries.
+- TLS for server connections (SSL modes from *disable* to *verify-full*,
+  CA and client certificates, Oracle wallets).
 
 ## Building (Linux)
 

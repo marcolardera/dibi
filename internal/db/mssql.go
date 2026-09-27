@@ -13,6 +13,7 @@ import (
 	"dibi/internal/sqlsplit"
 
 	mssql "github.com/microsoft/go-mssqldb"
+	"github.com/microsoft/go-mssqldb/msdsn"
 )
 
 // mssqlDialect serves SQL Server. Catalog views only describe the current
@@ -28,15 +29,19 @@ func (mssqlDialect) open(c config.Connection, database string) (*sql.DB, error) 
 	if database != "" {
 		q.Set("database", database)
 	}
-	if c.Encrypt {
+	switch c.TLSMode() {
+	case config.SSLDisable:
+		q.Set("encrypt", "disable")
+	case config.SSLPrefer:
+		// Without encrypt, only the login packet is encrypted, unless the
+		// server forces encryption.
+	default:
 		q.Set("encrypt", "true")
-	}
-	if c.TrustServerCert {
-		q.Set("trustservercertificate", "true")
 	}
 	u := &url.URL{Scheme: "sqlserver", RawQuery: q.Encode()}
 	// host\instance: the port is found through the SQL Server Browser.
-	if host, instance, ok := strings.Cut(c.Host, `\`); ok {
+	host, instance, named := strings.Cut(c.Host, `\`)
+	if named {
 		u.Host, u.Path = host, instance
 	} else {
 		u.Host = net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
@@ -45,11 +50,20 @@ func (mssqlDialect) open(c config.Connection, database string) (*sql.DB, error) 
 	if c.User != "" {
 		u.User = url.UserPassword(c.User, c.Password)
 	}
-	conn, err := mssql.NewConnector(u.String())
+	cfg, err := msdsn.Parse(u.String())
 	if err != nil {
 		return nil, err
 	}
-	return sql.OpenDB(conn), nil
+	if cfg.Encryption != msdsn.EncryptionDisabled {
+		tlsCfg, err := tlsConfig(c, host)
+		if err != nil {
+			return nil, err
+		}
+		// SQL Server expects one TDS packet per TLS record.
+		tlsCfg.DynamicRecordSizingDisabled = true
+		cfg.TLSConfig = tlsCfg
+	}
+	return sql.OpenDB(mssql.NewConnectorConfig(cfg)), nil
 }
 
 func (mssqlDialect) splitDialect() sqlsplit.Dialect { return sqlsplit.MSSQL }

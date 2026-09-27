@@ -138,6 +138,7 @@ The preview query uses the right syntax for each database type (e.g. `LIMIT 50`,
 ### New Connection window
 
 - Choose the database type first; the form then shows only the fields relevant to that type (host, port, database, user, password for server databases; a file path for SQLite, DuckDB, CSV and Parquet).
+- An **SSL mode** for server databases (see "TLS" below), with the certificate files it needs.
 - A **Test connection** button.
 
 ### SQL Editor
@@ -251,15 +252,15 @@ In v1, passwords are stored in **plaintext** in the connection YAML file. Moving
 - **Info panel tabs.** The preview sub-tab is titled "Data preview" to make clear it only shows the first 50 rows.
 - **Export from the info panel** exports the whole table or view, not only the 50-row preview.
 - **System objects are hidden**: Postgres `pg_*`/`information_schema` schemas, MySQL system databases, Oracle-maintained users, Oracle LOB indexes, SQL Server `sys`/`INFORMATION_SCHEMA`/fixed-role schemas and shipped objects (system databases are listed last).
-- **SQL Server connections.** `host\instance` names a named instance (the port is then found through the SQL Server Browser). An empty user means integrated authentication. "Encrypt connection" and "Trust server certificate" set the TLS mode (a self-signed certificate needs the latter).
+- **SQL Server connections.** `host\instance` names a named instance (the port is then found through the SQL Server Browser). An empty user means integrated authentication.
+- **TLS.** Server connections have an SSL mode named after libpq's `sslmode`: *disable*, *prefer* (TLS if the server offers it, otherwise plaintext), *require* (always TLS, certificate not checked, so a self-signed one is accepted), *verify-ca* (the certificate must be signed by a trusted CA) and *verify-full* (it must also name the host). The default is *prefer*, except for Oracle, which has no *prefer* because TLS (TCPS) is served by a separate listener; there the default is *disable*. The verify modes trust the system CAs, or a CA certificate file (PEM) if one is set. A client certificate and key (PEM) can be given for mutual TLS, except on SQL Server. Oracle also accepts a wallet folder (such as the one downloaded for an Autonomous Database): its `cwallet.sso` supplies the trusted CAs and the client certificate. On SQL Server, *prefer* leaves `encrypt` off (only the login is encrypted, unless the server forces encryption).
 - **File connections** refuse to open a missing file (a mistyped path does not create an empty database).
 - **Theme.** If the desktop theme is dark, Dibi switches to Qt's light Fusion palette.
 
 ## Out of scope for v1
 
 - Editing data in the grid
-- SSH tunnels
-- SSL/TLS connection options
+- SSH tunnels (use `ssh -L` and connect to the local port)
 - Autocomplete
 - ER diagrams
 - Generated DDL view

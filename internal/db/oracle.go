@@ -17,8 +17,17 @@ import (
 type oracle struct{}
 
 func (oracle) open(c config.Connection, _ string) (*sql.DB, error) {
-	url := go_ora.BuildUrl(c.Host, c.Port, c.Database, c.User, c.Password, nil)
-	return sql.Open("oracle", url)
+	tlsCfg, err := tlsConfig(c, c.Host)
+	if err != nil {
+		return nil, err
+	}
+	var opts map[string]string
+	if tlsCfg != nil {
+		opts = map[string]string{"SSL": "true"} // TCPS
+	}
+	conn := go_ora.NewConnector(go_ora.BuildUrl(c.Host, c.Port, c.Database, c.User, c.Password, opts))
+	conn.(*go_ora.OracleConnector).WithTLSConfig(tlsCfg)
+	return sql.OpenDB(conn), nil
 }
 
 func (oracle) splitDialect() sqlsplit.Dialect { return sqlsplit.Oracle }

@@ -30,6 +30,14 @@ func (postgres) open(c config.Connection, database string) (*sql.DB, error) {
 	}
 	cfg.Host = c.Host
 	cfg.Port = uint16(c.Port)
+	if cfg.TLSConfig, err = tlsConfig(c, c.Host); err != nil {
+		return nil, err
+	}
+	// Prefer retries without TLS if the TLS attempt fails.
+	cfg.Fallbacks = nil
+	if c.TLSMode() == config.SSLPrefer {
+		cfg.Fallbacks = []*pgconn.FallbackConfig{{Host: c.Host, Port: uint16(c.Port)}}
+	}
 	cfg.User = c.User
 	cfg.Password = c.Password
 	cfg.Database = database

@@ -109,3 +109,41 @@ func TestQueriesAndState(t *testing.T) {
 		t.Fatalf("unexpected state %+v", st)
 	}
 }
+
+func TestSSLMode(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SQL Server connections saved before SSLMode existed.
+	legacy := map[string]string{
+		"a": "name: a\ntype: sqlserver\nhost: h\nport: 1433\nencrypt: true\ntrust_server_certificate: true\n",
+		"b": "name: b\ntype: sqlserver\nhost: h\nport: 1433\nencrypt: true\n",
+		"c": "name: c\ntype: sqlserver\nhost: h\nport: 1433\n",
+	}
+	for name, data := range legacy {
+		os.WriteFile(filepath.Join(s.Root, "connections", name+".yaml"), []byte(data), 0o600)
+	}
+	conns, err := s.Connections()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []SSLMode{SSLRequire, SSLVerifyFull, SSLPrefer}
+	for i, c := range conns {
+		if c.TLSMode() != want[i] {
+			t.Errorf("%s: mode %q, want %q", c.Name, c.TLSMode(), want[i])
+		}
+	}
+
+	if m := (&Connection{Type: Oracle}).TLSMode(); m != SSLDisable {
+		t.Errorf("Oracle default mode %q, want disable", m)
+	}
+	ora := Connection{Name: "o", Type: Oracle, Host: "h", Port: 1522, Database: "svc", SSLMode: SSLPrefer}
+	if err := ora.Validate(); err == nil {
+		t.Error("Oracle must reject prefer")
+	}
+	pg := Connection{Name: "p", Type: Postgres, Host: "h", Port: 5432, SSLMode: SSLRequire, SSLCert: "c.pem"}
+	if err := pg.Validate(); err == nil {
+		t.Error("a client certificate without a key must be rejected")
+	}
+}
