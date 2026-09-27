@@ -101,7 +101,7 @@ func (a *App) build() {
 	})
 
 	split := qt.NewQSplitter3(qt.Horizontal)
-	split.AddWidget(a.tree.widget.QWidget)
+	split.AddWidget(a.tree.panel)
 	split.AddWidget(a.tabs.QWidget)
 	split.SetStretchFactor(0, 0)
 	split.SetStretchFactor(1, 1)

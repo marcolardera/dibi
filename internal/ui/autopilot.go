@@ -191,6 +191,100 @@ func runAutopilot(a *App) {
 	}
 	p.check(ui(func() bool { return a.lastConn == "pg" && a.lastDB == "dibi" }), "last used = pg/dibi (got %s/%s)", a.lastConn, a.lastDB)
 
+	p.log("== Tree filter")
+	p.item("pg", "dibi", "dibi_test", "Tables", "customers") // loads the Tables group
+	shown := func(path ...string) bool {
+		it := p.item(path...)
+		return it != nil && !ui(it.IsHidden)
+	}
+	onUIWait(func() { a.tree.filter.SetText("ORD") })
+	p.check(shown("pg", "dibi", "dibi_test", "Tables", "orders"), "orders shown for ORD")
+	p.check(!shown("pg", "dibi", "dibi_test", "Tables", "customers"), "customers hidden for ORD")
+	p.check(shown("pg", "dibi", "dibi_test", "Views", "v_orders"), "matching view shown")
+	p.check(!ui(a.tree.noMatch.IsVisible), "no 'no match' hint when something matches")
+	p.shot("17-tree-filter")
+	onUIWait(func() { a.tree.filter.SetText("zzz_nothing") })
+	p.check(ui(a.tree.noMatch.IsVisible), "'no match' hint shown")
+	onUIWait(func() { a.tree.filter.Clear() })
+	p.check(shown("pg", "dibi", "dibi_test", "Tables", "customers"), "customers shown again after clearing")
+
+	p.log("== Editor: line numbers, find and replace")
+	ft := ui(func() *sqlTab {
+		return a.newScript("SELECT a FROM t1;\nselect b FROM t1;\nselect c from t2;", "")
+	})
+	ed := ft.editor
+	p.check(ui(func() bool { m := ed.ViewportMargins(); return m.Left() == ed.gutterWidth() && ed.gutterWidth() > 0 }),
+		"line number gutter beside the text")
+	key := func(k qt.Key, mods qt.KeyboardModifier) {
+		onUIWait(func() {
+			w := qt.QApplication_FocusWidget()
+			for _, typ := range []qt.QEvent__Type{qt.QEvent__ShortcutOverride, qt.QEvent__KeyPress, qt.QEvent__KeyRelease} {
+				qt.QCoreApplication_SendEvent(w.QObject, qt.NewQKeyEvent(typ, int(k), mods).QEvent)
+			}
+		})
+	}
+	onUIWait(func() { ed.SetFocus() })
+	time.Sleep(200 * time.Millisecond)
+	key(qt.Key_F, qt.ControlModifier)
+	if !ui(ed.find.frame.IsVisible) {
+		p.log("  (synthetic Ctrl+F not routed to shortcuts; opening directly)")
+		onUIWait(func() { ed.find.open(false) })
+	}
+	count := func() string { return ui(ed.find.count.Text) }
+	selected := func() string { return ui(func() string { return ed.TextCursor().SelectedText() }) }
+	onUIWait(func() { ed.find.findEdit.SetText("select") })
+	p.check(count() == "1 of 3" && selected() == "SELECT", "find as you type: %q, selected %q", count(), selected())
+	// Real Enter/Shift+Enter in the find field: keys must not reach the
+	// editor (Enter used to replace the selected match with a newline).
+	before := ui(ed.ToPlainText)
+	onUIWait(func() { ed.find.findEdit.SetFocus() })
+	key(qt.Key_Return, qt.NoModifier)
+	p.check(ui(ed.ToPlainText) == before, "Enter in the find field leaves the text alone")
+	p.check(count() == "2 of 3", "Enter goes to the next match: %q", count())
+	key(qt.Key_Return, qt.ShiftModifier)
+	p.check(count() == "1 of 3", "Shift+Enter goes to the previous match: %q", count())
+	key(qt.Key_Down, qt.NoModifier)
+	key(qt.Key_PageDown, qt.NoModifier)
+	p.check(ui(ed.ToPlainText) == before && count() == "1 of 3", "other keys in the find field do not move the editor: %q", count())
+	onUIWait(func() { ed.find.step(true) })
+	onUIWait(func() { ed.find.step(true) })
+	p.check(count() == "3 of 3", "next: %q", count())
+	onUIWait(func() { ed.find.step(true) })
+	p.check(count() == "1 of 3", "next wraps: %q", count())
+	onUIWait(func() { ed.find.step(false) })
+	p.check(count() == "3 of 3", "previous wraps: %q", count())
+	onUIWait(func() { ed.find.matchCase.SetChecked(true) })
+	p.check(strings.HasSuffix(count(), "of 2"), "match case: %q", count())
+	onUIWait(func() { ed.find.matchCase.SetChecked(false) })
+
+	onUIWait(func() { ed.find.showReplace(true) })
+	onUIWait(func() { ed.find.findEdit.SetText("t1"); ed.find.replace.SetText("orders") })
+	p.shot("18-find-replace")
+	onUIWait(func() { ed.find.replaceAll() })
+	text := func() string { return ui(ed.ToPlainText) }
+	p.check(strings.Count(text(), "orders") == 2 && !strings.Contains(text(), "t1"), "replace all: %q", text())
+	p.check(count() == "2 replaced", "replace all count: %q", count())
+	onUIWait(func() { ed.Undo() })
+	p.check(strings.Count(text(), "t1") == 2, "replace all is one undo step: %q", text())
+
+	onUIWait(func() { ed.find.findEdit.SetText("from"); ed.find.replace.SetText("FROM") })
+	onUIWait(func() { ed.find.selectMatch(0); ed.find.replace.SetFocus() })
+	key(qt.Key_Return, qt.NoModifier) // Enter in the replace field replaces one
+	key(qt.Key_Return, qt.NoModifier)
+	key(qt.Key_Return, qt.NoModifier)
+	p.check(strings.Count(text(), "FROM") == 3, "replace one by one: %q", text())
+
+	key(qt.Key_Escape, qt.NoModifier)
+	if ui(ed.find.frame.IsVisible) {
+		p.log("  (synthetic Esc not routed to shortcuts; closing directly)")
+		onUIWait(ed.find.close)
+	}
+	p.check(!ui(ed.find.frame.IsVisible) && ui(func() string { return ed.highlighter.search }) == "", "closed, highlights cleared")
+	onUIWait(func() {
+		ed.Document().SetModifiedWithBool(false)
+		a.closeTab(a.tabs.IndexOf(ft.widget))
+	})
+
 	p.log("== Ctrl+C on a tree item copies the table reference")
 	for _, c := range []struct {
 		path []string

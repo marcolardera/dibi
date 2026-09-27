@@ -1,0 +1,413 @@
+package ui
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf16"
+
+	qt "github.com/mappu/miqt/qt6"
+)
+
+// codeEditor is the SQL editor: a plain text editor with syntax
+// highlighting, a line number gutter and a find/replace bar.
+type codeEditor struct {
+	*qt.QPlainTextEdit
+	highlighter *sqlHighlighter
+	gutter      *qt.QWidget
+	find        *findBar
+}
+
+func newCodeEditor() *codeEditor {
+	e := &codeEditor{QPlainTextEdit: qt.NewQPlainTextEdit2()}
+	e.SetFont(monoFont())
+	e.SetLineWrapMode(qt.QPlainTextEdit__NoWrap)
+	e.SetTabStopDistance(float64(4 * e.FontMetrics().HorizontalAdvance(" ")))
+	e.highlighter = newSQLHighlighter(e.Document())
+
+	e.gutter = qt.NewQWidget(e.QWidget)
+	e.gutter.OnPaintEvent(func(_ func(*qt.QPaintEvent), ev *qt.QPaintEvent) { e.paintGutter(ev) })
+	e.OnBlockCountChanged(func(int) { e.updateGutterWidth() })
+	e.OnUpdateRequest(func(rect *qt.QRect, dy int) {
+		if dy != 0 {
+			e.gutter.Scroll(0, dy)
+		} else {
+			e.gutter.Update()
+		}
+	})
+	e.OnCursorPositionChanged(e.gutter.Update) // the current line number is emphasized
+	e.updateGutterWidth()
+
+	e.find = newFindBar(e)
+	e.OnResizeEvent(func(super func(*qt.QResizeEvent), ev *qt.QResizeEvent) {
+		super(ev)
+		cr := e.ContentsRect()
+		e.gutter.SetGeometry(cr.Left(), cr.Top(), e.gutterWidth(), cr.Height())
+		e.find.place()
+	})
+	return e
+}
+
+// gutterWidth fits the largest line number, with at least 3 digits.
+func (e *codeEditor) gutterWidth() int {
+	digits := max(len(strconv.Itoa(e.BlockCount())), 3)
+	return 12 + digits*e.FontMetrics().HorizontalAdvance("9")
+}
+
+func (e *codeEditor) updateGutterWidth() {
+	e.SetViewportMargins(e.gutterWidth(), 0, 0, 0)
+	cr := e.ContentsRect()
+	e.gutter.SetGeometry(cr.Left(), cr.Top(), e.gutterWidth(), cr.Height())
+}
+
+func (e *codeEditor) paintGutter(ev *qt.QPaintEvent) {
+	p := qt.NewQPainter2(e.gutter.QPaintDevice)
+	defer p.End()
+	area := ev.Rect()
+	p.FillRect5(area.Left(), area.Top(), area.Width(), area.Height(), qt.NewQColor6("#f3f3f3"))
+	p.SetFont(e.Font())
+	width, lineHeight := e.gutter.Width()-6, e.FontMetrics().Height()
+	current := e.TextCursor().BlockNumber()
+	normal, emphasis := qt.NewQColor6("#9a9a9a"), qt.NewQColor6("#303030")
+
+	block := e.FirstVisibleBlock()
+	offset := e.ContentOffset()
+	geo := e.BlockBoundingGeometry(&block)
+	top := geo.TranslatedWithQPointF(&offset).Top()
+	for block.IsValid() && int(top) <= area.Bottom() {
+		rect := e.BlockBoundingRect(&block)
+		height := rect.Height()
+		if block.IsVisible() && int(top+height) >= area.Top() {
+			if block.BlockNumber() == current {
+				p.SetPen(emphasis)
+			} else {
+				p.SetPen(normal)
+			}
+			p.DrawText7(0, int(top), width, lineHeight, int(qt.AlignRight|qt.AlignVCenter), strconv.Itoa(block.BlockNumber()+1))
+		}
+		top += height
+		block = *block.Next()
+	}
+}
+
+// findBar is the find/replace box shown over the top-right corner of the
+// editor. Matching is plain text (no regular expressions), optionally case
+// sensitive, and wraps around the document.
+type findBar struct {
+	e          *codeEditor
+	frame      *qt.QFrame
+	toggle     *qt.QToolButton
+	findEdit   *qt.QLineEdit
+	count      *qt.QLabel
+	matchCase  *qt.QToolButton
+	replaceRow *qt.QWidget
+	replace    *qt.QLineEdit
+	escape     *qt.QShortcut
+
+	matches  [][2]int // UTF-16 [start, end) positions in the document
+	replaced int      // matches replaced by the last Replace All, shown until the next change
+	busy     bool     // replacing: ignore document changes
+}
+
+func newFindBar(e *codeEditor) *findBar {
+	b := &findBar{e: e, frame: qt.NewQFrame(e.QWidget)}
+	b.frame.SetFrameShape(qt.QFrame__StyledPanel)
+	b.frame.SetAutoFillBackground(true)
+	b.frame.SetCursor(qt.NewQCursor2(qt.ArrowCursor))
+
+	toolButton := func(ic *qt.QIcon, text, tip string) *qt.QToolButton {
+		btn := qt.NewQToolButton2()
+		if ic != nil {
+			btn.SetIcon(ic)
+		}
+		btn.SetText(text)
+		btn.SetToolTip(tip)
+		btn.SetAutoRaise(true)
+		return btn
+	}
+	b.toggle = toolButton(nil, "", "Toggle Replace")
+	b.toggle.SetArrowType(qt.RightArrow)
+	b.findEdit = qt.NewQLineEdit2()
+	b.findEdit.SetPlaceholderText("Find")
+	b.findEdit.SetMinimumWidth(220)
+	b.count = qt.NewQLabel2()
+	b.count.SetMinimumWidth(b.count.FontMetrics().HorizontalAdvance("999 of 999"))
+	prev := toolButton(icon("go-up", qt.QStyle__SP_ArrowUp), "", "Previous match (Shift+Enter, Shift+F3)")
+	next := toolButton(icon("go-down", qt.QStyle__SP_ArrowDown), "", "Next match (Enter, F3)")
+	b.matchCase = toolButton(nil, "Aa", "Match case")
+	b.matchCase.SetCheckable(true)
+	closeBtn := toolButton(icon("window-close", qt.QStyle__SP_TitleBarCloseButton), "", "Close (Esc)")
+
+	b.replace = qt.NewQLineEdit2()
+	b.replace.SetPlaceholderText("Replace")
+	replaceBtn := qt.NewQPushButton3("Replace")
+	replaceAllBtn := qt.NewQPushButton3("Replace All")
+
+	grid := qt.NewQGridLayout2()
+	grid.SetContentsMargins(4, 4, 4, 4)
+	grid.SetHorizontalSpacing(2)
+	grid.SetVerticalSpacing(4)
+	grid.AddWidget2(b.toggle.QWidget, 0, 0)
+	grid.AddWidget2(b.findEdit.QWidget, 0, 1)
+	findTools := qt.NewQWidget2()
+	findTools.SetLayout(hbox(b.count.QWidget, prev.QWidget, next.QWidget, b.matchCase.QWidget, closeBtn.QWidget).QLayout)
+	grid.AddWidget2(findTools, 0, 2)
+	grid.AddWidget2(b.replace.QWidget, 1, 1)
+	b.replaceRow = qt.NewQWidget2()
+	b.replaceRow.SetLayout(hbox(replaceBtn.QWidget, replaceAllBtn.QWidget).QLayout)
+	grid.AddWidget2(b.replaceRow, 1, 2)
+	b.frame.SetLayout(grid.QLayout)
+	b.showReplace(false)
+	b.frame.Hide()
+
+	b.toggle.OnClicked(func() { b.showReplace(!b.replace.IsVisible()) })
+	b.findEdit.OnTextChanged(func(string) { b.update(true) })
+	onEnter(b.findEdit, func(shift bool) { b.step(!shift) })
+	b.matchCase.OnToggled(func(bool) { b.update(true) })
+	prev.OnClicked(func() { b.step(false) })
+	next.OnClicked(func() { b.step(true) })
+	closeBtn.OnClicked(b.close)
+	onEnter(b.replace, func(bool) { b.replaceOne() })
+	// Keys the fields do not use (QLineEdit ignores Enter, Up, Down, …)
+	// propagate to the parent, which is the editor: keep them in the bar,
+	// or Enter would replace the selected match with a newline.
+	b.frame.OnKeyPressEvent(func(_ func(*qt.QKeyEvent), ev *qt.QKeyEvent) { ev.Accept() })
+	replaceBtn.OnClicked(b.replaceOne)
+	replaceAllBtn.OnClicked(b.replaceAll)
+	e.Document().OnContentsChanged(func() {
+		if b.frame.IsVisible() && !b.busy {
+			b.replaced = 0
+			b.update(false)
+		}
+	})
+
+	// Shortcuts work in the editor and in the bar (a child of the editor).
+	shortcut := func(seq *qt.QKeySequence, f func()) *qt.QShortcut {
+		sc := qt.NewQShortcut2(seq, e.QObject)
+		sc.SetContext(qt.WidgetWithChildrenShortcut)
+		sc.OnActivated(f)
+		return sc
+	}
+	shortcut(qt.NewQKeySequence6(qt.QKeySequence__Find), func() { b.open(false) })
+	shortcut(qt.NewQKeySequence6(qt.QKeySequence__Replace), func() { b.open(true) })
+	shortcut(qt.NewQKeySequence6(qt.QKeySequence__FindNext), func() { b.stepOrOpen(true) })
+	shortcut(qt.NewQKeySequence6(qt.QKeySequence__FindPrevious), func() { b.stepOrOpen(false) })
+	b.escape = shortcut(qt.NewQKeySequence2("Esc"), b.close)
+	b.escape.SetEnabled(false)
+	return b
+}
+
+// onEnter handles Enter in a line edit, reporting whether Shift is held.
+func onEnter(edit *qt.QLineEdit, f func(shift bool)) {
+	edit.OnKeyPressEvent(func(super func(*qt.QKeyEvent), ev *qt.QKeyEvent) {
+		if k := qt.Key(ev.Key()); k == qt.Key_Return || k == qt.Key_Enter {
+			ev.Accept()
+			f(ev.Modifiers()&qt.ShiftModifier != 0)
+			return
+		}
+		super(ev)
+	})
+}
+
+func (b *findBar) showReplace(on bool) {
+	b.replace.SetVisible(on)
+	b.replaceRow.SetVisible(on)
+	if on {
+		b.toggle.SetArrowType(qt.DownArrow)
+	} else {
+		b.toggle.SetArrowType(qt.RightArrow)
+	}
+	b.place()
+}
+
+// place moves the bar to the top-right corner of the text area.
+func (b *findBar) place() {
+	b.frame.AdjustSize()
+	vp := b.e.Viewport().Geometry()
+	b.frame.Move(max(vp.X(), vp.X()+vp.Width()-b.frame.Width()-4), vp.Y()+2)
+}
+
+// open shows the bar, searching for the selected text if it fits on a line.
+func (b *findBar) open(withReplace bool) {
+	cur := b.e.TextCursor()
+	if sel := cur.SelectedText(); sel != "" && !strings.ContainsRune(sel, ' ') {
+		b.findEdit.SetText(sel) // the selection is a match, so it stays selected
+	}
+	b.showReplace(withReplace)
+	b.frame.Show()
+	b.frame.Raise()
+	b.escape.SetEnabled(true)
+	b.update(false)
+	if withReplace && b.findEdit.Text() != "" {
+		b.replace.SetFocus()
+		b.replace.SelectAll()
+	} else {
+		b.findEdit.SetFocus()
+		b.findEdit.SelectAll()
+	}
+}
+
+func (b *findBar) close() {
+	b.frame.Hide()
+	b.escape.SetEnabled(false)
+	b.e.highlighter.setSearch("", false)
+	b.e.SetFocus()
+}
+
+// update recomputes the matches. With jump, it also selects the first
+// match at or after the start of the current selection (find as you type).
+func (b *findBar) update(jump bool) {
+	text, matchCase := b.findEdit.Text(), b.matchCase.IsChecked()
+	b.e.highlighter.setSearch(text, matchCase)
+	b.matches = findAll(b.e.ToPlainText(), text, matchCase)
+	if jump && len(b.matches) > 0 {
+		b.selectMatch(b.nextFrom(b.e.TextCursor().SelectionStart()))
+	}
+	b.showCount()
+}
+
+func (b *findBar) showCount() {
+	b.count.SetStyleSheet("")
+	switch {
+	case b.replaced > 0:
+		b.count.SetText(fmt.Sprintf("%d replaced", b.replaced))
+	case b.findEdit.Text() == "":
+		b.count.SetText("")
+	case len(b.matches) == 0:
+		b.count.SetStyleSheet("color: #b00020;")
+		b.count.SetText("No results")
+	default:
+		if i := b.current(); i >= 0 {
+			b.count.SetText(fmt.Sprintf("%d of %d", i+1, len(b.matches)))
+		} else {
+			b.count.SetText(fmt.Sprintf("%d found", len(b.matches)))
+		}
+	}
+	b.place()
+}
+
+// current returns the index of the match that is selected, or -1.
+func (b *findBar) current() int {
+	cur := b.e.TextCursor()
+	for i, m := range b.matches {
+		if m[0] == cur.SelectionStart() && m[1] == cur.SelectionEnd() {
+			return i
+		}
+	}
+	return -1
+}
+
+// nextFrom returns the first match starting at or after pos, wrapping.
+func (b *findBar) nextFrom(pos int) int {
+	for i, m := range b.matches {
+		if m[0] >= pos {
+			return i
+		}
+	}
+	return 0
+}
+
+func (b *findBar) selectMatch(i int) {
+	cur := b.e.TextCursor()
+	cur.SetPosition(b.matches[i][0])
+	cur.SetPosition2(b.matches[i][1], qt.QTextCursor__KeepAnchor)
+	b.e.SetTextCursor(cur)
+	b.e.CenterCursor()
+}
+
+// step selects the next or previous match, wrapping around.
+func (b *findBar) step(forward bool) {
+	if len(b.matches) == 0 {
+		return
+	}
+	cur := b.e.TextCursor()
+	i := b.nextFrom(cur.SelectionEnd())
+	if !forward {
+		i = len(b.matches) - 1
+		for j := len(b.matches) - 1; j >= 0; j-- {
+			if b.matches[j][0] < cur.SelectionStart() {
+				i = j
+				break
+			}
+		}
+	}
+	b.selectMatch(i)
+	b.showCount()
+}
+
+// stepOrOpen serves F3/Shift+F3, which open the bar when nothing is searched.
+func (b *findBar) stepOrOpen(forward bool) {
+	if b.findEdit.Text() == "" {
+		b.open(false)
+		return
+	}
+	if !b.frame.IsVisible() {
+		b.frame.Show()
+		b.escape.SetEnabled(true)
+		b.update(false)
+	}
+	b.step(forward)
+}
+
+// replaceOne replaces the selected match, if any, and selects the next one.
+func (b *findBar) replaceOne() {
+	if i := b.current(); i >= 0 {
+		b.e.TextCursor().InsertText(b.replace.Text())
+	}
+	b.step(true)
+}
+
+// replaceAll replaces every match in one undoable edit.
+func (b *findBar) replaceAll() {
+	if len(b.matches) == 0 {
+		return
+	}
+	n := len(b.matches)
+	cur := b.e.TextCursor()
+	b.busy = true
+	cur.BeginEditBlock()
+	for i := n - 1; i >= 0; i-- { // backwards, so earlier positions stay valid
+		cur.SetPosition(b.matches[i][0])
+		cur.SetPosition2(b.matches[i][1], qt.QTextCursor__KeepAnchor)
+		cur.InsertText(b.replace.Text())
+	}
+	cur.EndEditBlock()
+	b.busy = false
+	b.e.SetTextCursor(cur)
+	b.update(false)
+	b.replaced = n
+	b.showCount()
+}
+
+// findAll returns the non-overlapping occurrences of term in text as
+// [start, end) positions in UTF-16 code units, the unit of Qt positions.
+func findAll(text, term string, matchCase bool) [][2]int {
+	if term == "" {
+		return nil
+	}
+	hay, needle := []rune(text), []rune(term)
+	same := func(a, b rune) bool {
+		return a == b || !matchCase && (unicode.ToLower(a) == unicode.ToLower(b) || unicode.ToUpper(a) == unicode.ToUpper(b))
+	}
+	var out [][2]int
+	pos := 0 // UTF-16 position of hay[i]
+	for i := 0; i+len(needle) <= len(hay); {
+		j := 0
+		for j < len(needle) && same(hay[i+j], needle[j]) {
+			j++
+		}
+		if j == len(needle) {
+			start := pos
+			for _, r := range hay[i : i+j] {
+				pos += utf16.RuneLen(r)
+			}
+			out = append(out, [2]int{start, pos})
+			i += j
+			continue
+		}
+		pos += utf16.RuneLen(hay[i])
+		i++
+	}
+	return out
+}

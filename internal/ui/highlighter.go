@@ -40,11 +40,28 @@ func charFormat(color string, bold, italic bool) *qt.QTextCharFormat {
 	return f
 }
 
+// sqlHighlighter highlights SQL syntax and the matches of the find bar.
+type sqlHighlighter struct {
+	*qt.QSyntaxHighlighter
+	search    string // text to mark, "" for none
+	matchCase bool
+}
+
+// setSearch changes the text marked as a search match.
+func (h *sqlHighlighter) setSearch(text string, matchCase bool) {
+	if text == h.search && matchCase == h.matchCase {
+		return
+	}
+	h.search, h.matchCase = text, matchCase
+	h.Rehighlight()
+}
+
 // newSQLHighlighter highlights keywords, numbers, strings and comments.
 // Rules are applied in order, so later ones (strings, comments) win over
 // keywords found inside them.
-func newSQLHighlighter(doc *qt.QTextDocument) *qt.QSyntaxHighlighter {
-	h := qt.NewQSyntaxHighlighter2(doc)
+func newSQLHighlighter(doc *qt.QTextDocument) *sqlHighlighter {
+	h := &sqlHighlighter{QSyntaxHighlighter: qt.NewQSyntaxHighlighter2(doc)}
+	matchBg := qt.NewQBrush3(qt.NewQColor6("#ffe58a"))
 	ci := qt.QRegularExpression__CaseInsensitiveOption
 	rules := []highlightRule{
 		{qt.NewQRegularExpression4(`\b(`+strings.Join(sqlKeywords, "|")+`)\b`, ci), charFormat("#0033b3", true, false)},
@@ -84,6 +101,14 @@ func newSQLHighlighter(doc *qt.QTextDocument) *qt.QSyntaxHighlighter {
 			}
 			h.SetFormat(start, end+2-start, comment)
 			start = int(open.Match2(text, int64(end+2)).CapturedStart())
+		}
+		// Search matches get a background, keeping their syntax colors.
+		for _, m := range findAll(text, h.search, h.matchCase) {
+			for i := m[0]; i < m[1]; i++ {
+				f := h.Format(i)
+				f.SetBackground(matchBg)
+				h.SetFormat(i, 1, &f)
+			}
 		}
 	})
 	return h

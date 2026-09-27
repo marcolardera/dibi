@@ -15,12 +15,14 @@ See [spec.md](spec.md) for the full specification.
 - Object tree per connection, loaded lazily: databases, schemas, tables,
   views, materialized views, functions, procedures, packages, sequences,
   and indexes/triggers under their table.
+  A filter box narrows it as you type.
 - Information panel: columns (type, nullability, key, default, comment),
   constraints, indexes, source code of views/routines/triggers, and a
   50-row data preview.
 - `Ctrl+C` on a table or view in the tree copies its query-ready name
   (e.g. `schema.table`, quoted where needed).
-- SQL editor with syntax highlighting. **Run** (`Ctrl+Enter`) executes the
+- SQL editor with syntax highlighting, line numbers and find/replace
+  (`Ctrl+F`, `Ctrl+H`). **Run** (`Ctrl+Enter`) executes the
   selection, or the whole script statement by statement; each result set
   gets its own tab. Each editor tab has its own database session.
 - New scripts default to the connection (and database) you used last.

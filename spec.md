@@ -127,6 +127,8 @@ Object types include tables, views, stored procedures/functions and sequences, d
 
 Children are **loaded lazily** when a node is expanded (Oracle schemas can contain thousands of objects).
 
+A **filter box** above the tree filters as you type (case-insensitive substring of the name). It shows the matching objects, everything under them, and the path to them, which is expanded. Only loaded nodes can match, since the tree is lazy: nodes that were never expanded (connections, databases, schemas, object-type groups) stay visible so they can be expanded, and their children are filtered as soon as they load. Group names such as "Tables" never match. When nothing loaded matches, a hint says so; `Esc` clears the filter.
+
 Left click opens the information panel with the detailed information about the object:
 
 - For tables: the full schema, including data types and constraints (primary key, foreign key, not null, unique, default values), plus its indexes.
@@ -144,6 +146,8 @@ The preview query uses the right syntax for each database type (e.g. `LIMIT 50`,
 ### SQL Editor
 
 - Syntax highlighting for ANSI SQL keywords, strings, numbers and comments.
+- Line numbers in a gutter on the left; the number of the current line is darker.
+- **Find and replace** in a small box over the top-right corner of the editor. `Ctrl+F` opens it for finding, `Ctrl+H` with the replace row (a toggle shows or hides it); a selection on one line becomes the search text. Plain text only (no regular expressions), case-insensitive unless "Aa" (match case) is on. It finds as you type, highlights every match, shows "N of M" and wraps around. `Enter`/`F3` go to the next match, `Shift+Enter`/`Shift+F3` to the previous one, `Esc` closes the box. "Replace" replaces the selected match and moves to the next; "Replace All" replaces every match in one undoable step.
 - No autocomplete.
 - Each SQL editor tab has a **connection selector** (dropdown) at the top.
 - Each SQL editor tab opens its **own database session** (separate connection), so tabs never block each other and Stop only affects the current tab.

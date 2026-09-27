@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"dibi/internal/config"
@@ -20,17 +21,41 @@ type treeEntry struct {
 }
 
 // objectTree is the left panel: connections and their objects, loaded
-// lazily when a node is expanded.
+// lazily when a node is expanded, under a filter box.
 type objectTree struct {
 	app     *App
+	panel   *qt.QWidget // filter box and tree
+	filter  *qt.QLineEdit
+	noMatch *qt.QLabel
 	widget  *qt.QTreeWidget
 	entries map[uintptr]*treeEntry
 	items   map[uintptr]*qt.QTreeWidgetItem
 }
 
 func newObjectTree(app *App) *objectTree {
-	t := &objectTree{app: app, widget: qt.NewQTreeWidget2(),
+	t := &objectTree{app: app, panel: qt.NewQWidget2(), widget: qt.NewQTreeWidget2(),
 		entries: map[uintptr]*treeEntry{}, items: map[uintptr]*qt.QTreeWidgetItem{}}
+
+	t.filter = qt.NewQLineEdit2()
+	t.filter.SetPlaceholderText("Filter objects")
+	t.filter.SetToolTip("Shows the loaded objects whose name contains the text.\n" +
+		"Nodes not expanded yet stay visible: expand them to search their objects.")
+	t.filter.SetClearButtonEnabled(true)
+	t.filter.OnTextChanged(func(string) { t.applyFilter() })
+	clear := qt.NewQShortcut2(qt.NewQKeySequence2("Esc"), t.filter.QObject)
+	clear.SetContext(qt.WidgetShortcut)
+	clear.OnActivated(t.filter.Clear)
+	t.noMatch = qt.NewQLabel3("No loaded object matches.")
+	t.noMatch.SetStyleSheet("color: #888888;")
+	t.noMatch.SetContentsMargins(4, 0, 0, 0)
+	t.noMatch.Hide()
+	layout := qt.NewQVBoxLayout(t.panel)
+	layout.SetContentsMargins(0, 0, 0, 0)
+	layout.SetSpacing(2)
+	layout.AddWidget(t.filter.QWidget)
+	layout.AddWidget(t.noMatch.QWidget)
+	layout.AddWidget(t.widget.QWidget)
+
 	w := t.widget
 	w.SetHeaderHidden(true)
 	w.SetUniformRowHeights(true)
@@ -104,6 +129,53 @@ func (t *objectTree) reload() {
 		item.SetToolTip(0, connDescription(c))
 		t.add(item, &treeEntry{conn: c.Name, node: db.Node{Kind: db.KindConnection, Name: c.Name}})
 	}
+	t.applyFilter()
+}
+
+// applyFilter shows the items whose name contains the filter text (case
+// insensitive), everything inside them, and the path to them, expanding
+// that path. Only loaded items can match: containers that were never
+// expanded (connections, databases, schemas, groups) stay visible so that
+// they can be. Group names ("Tables") do not match.
+func (t *objectTree) applyFilter() {
+	text := strings.ToLower(strings.TrimSpace(t.filter.Text()))
+	found := false
+	for i := 0; i < t.widget.TopLevelItemCount(); i++ {
+		if _, m := t.filterItem(t.widget.TopLevelItem(i), text, text == ""); m {
+			found = true
+		}
+	}
+	t.noMatch.SetVisible(text != "" && !found)
+}
+
+// filterItem applies the filter to an item and its children. inside means
+// that an ancestor matched. It reports whether the item is shown and
+// whether it or a descendant matched.
+func (t *objectTree) filterItem(item *qt.QTreeWidgetItem, text string, inside bool) (shown, matched bool) {
+	e := t.entry(item)
+	self := e != nil && text != "" && e.node.Kind != db.KindGroup &&
+		strings.Contains(strings.ToLower(e.node.Name), text)
+	below, childShown := false, false // a descendant matched, a child is shown
+	for i := 0; i < item.ChildCount(); i++ {
+		s, m := t.filterItem(item.Child(i), text, inside || self)
+		below, childShown = below || m, childShown || s
+	}
+	unexplored := e != nil && !e.loaded && isContainer(e.node.Kind)
+	shown = inside || self || childShown || unexplored
+	item.SetHidden(!shown)
+	if below && !inside && !self {
+		item.SetExpanded(true)
+	}
+	return shown, self || below
+}
+
+// isContainer reports whether a node only groups other nodes.
+func isContainer(k db.Kind) bool {
+	switch k {
+	case db.KindConnection, db.KindDatabase, db.KindSchema, db.KindGroup:
+		return true
+	}
+	return false
 }
 
 func connDescription(c config.Connection) string {
@@ -205,6 +277,12 @@ func (t *objectTree) expand(item *qt.QTreeWidgetItem) {
 			child := qt.NewQTreeWidgetItem7(item, []string{n.Name})
 			child.SetIcon(0, nodeIcon(n.Kind))
 			t.add(child, &treeEntry{conn: e.conn, node: n})
+		}
+		if t.filter.Text() != "" {
+			t.applyFilter()
+			if item.IsHidden() {
+				t.app.setStatus(fmt.Sprintf("Nothing in %s matches the filter.", node.Name))
+			}
 		}
 	})
 }

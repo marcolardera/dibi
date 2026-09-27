@@ -30,7 +30,7 @@ type sqlTab struct {
 	connCombo *qt.QComboBox
 	dbLabel   *qt.QLabel
 	dbCombo   *qt.QComboBox
-	editor    *qt.QPlainTextEdit
+	editor    *codeEditor
 	results   *qt.QTabWidget
 	messages  *qt.QPlainTextEdit
 	views     []*resultView
@@ -69,11 +69,7 @@ func newSQLTab(app *App, number int, conn, database string) *sqlTab {
 
 	// Editor and results.
 	split := qt.NewQSplitter3(qt.Vertical)
-	t.editor = qt.NewQPlainTextEdit2()
-	t.editor.SetFont(monoFont())
-	t.editor.SetLineWrapMode(qt.QPlainTextEdit__NoWrap)
-	t.editor.SetTabStopDistance(float64(4 * t.editor.FontMetrics().HorizontalAdvance(" ")))
-	newSQLHighlighter(t.editor.Document())
+	t.editor = newCodeEditor()
 	t.editor.OnModificationChanged(func(bool) { app.updateTabTitle(t) })
 
 	t.results = qt.NewQTabWidget2()
