@@ -121,7 +121,7 @@ The hierarchy depends on the database type:
 | SQL Server      | Connection → Database → Schema → object type → object            |
 | SQLite          | Connection → Database (`main` + attached) → object type → object |
 | DuckDB          | Connection → Database → Schema → object type → object            |
-| CSV / Parquet   | Connection (a single file) → the file, shown as one table        |
+| CSV / Parquet   | Connection (a file or a folder) → one view per file              |
 
 Object types include tables, views, stored procedures/functions and sequences, depending on what each database supports. Indexes, constraints and triggers are shown **under their table**, not next to it.
 
@@ -141,7 +141,9 @@ The preview query uses the right syntax for each database type (e.g. `LIMIT 50`,
 
 - Choose the database type first; the form then shows only the fields relevant to that type (host, port, database, user, password for server databases; a file path for SQLite, DuckDB, CSV and Parquet).
 - An **SSL mode** for server databases (see "TLS" below), with the certificate files it needs.
-- A **Test connection** button.
+- A **Test connection** button for server databases. File connections have none: opening a local file tests nothing more than whether it exists, which Save checks.
+- CSV and Parquet connections point to a **file or a folder**. In a folder, each file with the type's extension (`.csv` or `.parquet`, in any case) becomes a view named after the file, so files can be joined or combined with `UNION`. Subfolders and hidden files are ignored. Names differing only in case get a numeric suffix (`orders`, `orders_2`). Refreshing the connection picks up added and removed files; files that cannot be read are reported in the tree without hiding the others.
+- CSV connections only read `.csv` files, and have a **separator** (comma, semicolon, tab, pipe) and a **quote character** (double or single quote). Both default to *auto-detect*, which lets DuckDB sniff them from each file.
 
 ### SQL Editor
 
@@ -271,5 +273,4 @@ In v1, passwords are stored in **plaintext** in the connection YAML file. Moving
 - OS keychain for credentials
 - Advanced transaction handling (manual commit/rollback)
 - Dark theme
-- CSV/Parquet connections pointing to a folder of files
 - Opening `.sql` files from outside `dibi/queries/`

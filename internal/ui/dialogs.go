@@ -2,7 +2,9 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,9 +59,21 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 	wallet.SetPlaceholderText("folder with cwallet.sso")
 	path := qt.NewQLineEdit2()
 	browse := qt.NewQPushButton3("Browse…")
+	// CSV and Parquet connections can also point to a folder of files.
+	browseDir := qt.NewQPushButton3("Folder…")
 	pathRow := qt.NewQWidget2()
-	pathLayout := hbox(path.QWidget, browse.QWidget)
+	pathLayout := hbox(path.QWidget, browse.QWidget, browseDir.QWidget)
 	pathRow.SetLayout(pathLayout.QLayout)
+
+	// CSV options; the empty value means detected from the file.
+	separator := qt.NewQComboBox2()
+	for _, o := range [][2]string{{"Auto-detect", ""}, {"Comma ( , )", ","}, {"Semicolon ( ; )", ";"}, {"Tab", "\t"}, {"Pipe ( | )", "|"}} {
+		separator.AddItem3(o[0], qt.NewQVariant14(o[1]))
+	}
+	quote := qt.NewQComboBox2()
+	for _, o := range [][2]string{{"Auto-detect", ""}, {`Double quote ( " )`, `"`}, {"Single quote ( ' )", "'"}} {
+		quote.AddItem3(o[0], qt.NewQVariant14(o[1]))
+	}
 
 	dbLabel := qt.NewQLabel3("Database:")
 	form.AddRow3("Type:", typeCombo.QWidget)
@@ -80,6 +94,9 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 	form.AddRow(clientKeyLabel.QWidget, clientKeyRow)
 	form.AddRow(walletLabel.QWidget, walletRow)
 	form.AddRow(pathLabel.QWidget, pathRow)
+	sepLabel, quoteLabel := qt.NewQLabel3("Separator:"), qt.NewQLabel3("Quote character:")
+	form.AddRow(sepLabel.QWidget, separator.QWidget)
+	form.AddRow(quoteLabel.QWidget, quote.QWidget)
 
 	status := qt.NewQLabel2()
 	status.SetWordWrap(true)
@@ -132,6 +149,22 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 		for _, w := range fileRows {
 			w.SetVisible(t.IsFile())
 		}
+		for _, w := range []*qt.QWidget{sepLabel.QWidget, separator.QWidget, quoteLabel.QWidget, quote.QWidget} {
+			w.SetVisible(t == config.CSV)
+		}
+		folders := t == config.CSV || t == config.Parquet
+		browseDir.SetVisible(folders)
+		if folders {
+			pathLabel.SetText("File or folder:")
+			browse.SetText("File…")
+		} else {
+			pathLabel.SetText("File:")
+			browse.SetText("Browse…")
+		}
+		// Opening a local file checks nothing a missing path would not;
+		// Save checks the path instead.
+		testBtn.SetVisible(!t.IsFile())
+		status.Clear()
 		if resetPort {
 			setSSLModes("")
 		} else {
@@ -165,14 +198,30 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 		case config.DuckDB:
 			filter = "DuckDB databases (*.duckdb *.db);;All files (*)"
 		case config.CSV:
-			filter = "CSV files (*.csv *.tsv *.txt);;All files (*)"
+			filter = "CSV files (*.csv)"
 		case config.Parquet:
 			filter = "Parquet files (*.parquet);;All files (*)"
 		}
-		if f := qt.QFileDialog_GetOpenFileName4(dlg.QWidget, "Choose File", filepath.Dir(path.Text()), filter); f != "" {
+		dir := path.Text()
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			dir = filepath.Dir(dir)
+		}
+		if f := qt.QFileDialog_GetOpenFileName4(dlg.QWidget, "Choose File", dir, filter); f != "" {
 			path.SetText(f)
 			if name.Text() == "" {
 				name.SetText(strings.TrimSuffix(filepath.Base(f), filepath.Ext(f)))
+			}
+		}
+	})
+	browseDir.OnClicked(func() {
+		dir := path.Text()
+		if fi, err := os.Stat(dir); err == nil && !fi.IsDir() {
+			dir = filepath.Dir(dir)
+		}
+		if f := qt.QFileDialog_GetExistingDirectory3(dlg.QWidget, "Choose Folder", dir); f != "" {
+			path.SetText(f)
+			if name.Text() == "" {
+				name.SetText(filepath.Base(f))
 			}
 		}
 	})
@@ -181,6 +230,10 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 		c := config.Connection{Name: strings.TrimSpace(name.Text()), Type: currentType()}
 		if c.Type.IsFile() {
 			c.Path = strings.TrimSpace(path.Text())
+			if c.Type == config.CSV {
+				c.Separator = separator.CurrentData().ToString()
+				c.Quote = quote.CurrentData().ToString()
+			}
 		} else {
 			c.Host = strings.TrimSpace(host.Text())
 			c.Port = port.Value()
@@ -250,6 +303,23 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 	}
 	buttons.OnAccepted(func() {
 		c := collect()
+		if c.Type.IsFile() && c.Path != "" {
+			fi, err := os.Stat(c.Path)
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+				showStatus(false, c.Path+" does not exist.")
+				return
+			case err != nil:
+				showStatus(false, err.Error())
+				return
+			case fi.IsDir() && c.Type != config.CSV && c.Type != config.Parquet:
+				showStatus(false, c.Path+" is a folder; choose a "+c.Type.Label()+" database file.")
+				return
+			case !fi.IsDir() && c.Type == config.CSV && !strings.EqualFold(filepath.Ext(c.Path), db.DataExtension(c.Type)):
+				showStatus(false, "Choose a .csv file or a folder.")
+				return
+			}
+		}
 		if err := store.SaveConnection(c, oldName); err != nil {
 			showStatus(false, err.Error())
 			return
@@ -273,6 +343,8 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 		clientKey.SetText(existing.SSLKey)
 		wallet.SetText(existing.Wallet)
 		path.SetText(existing.Path)
+		separator.SetCurrentIndex(max(separator.FindData(qt.NewQVariant14(existing.Separator)), 0))
+		quote.SetCurrentIndex(max(quote.FindData(qt.NewQVariant14(existing.Quote)), 0))
 		setSSLModes(existing.TLSMode())
 		updateFields(false)
 	} else {

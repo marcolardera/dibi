@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -138,6 +139,9 @@ func (t Type) SSLModes() []SSLMode {
 // modes. SSLCert and SSLKey are a client certificate and its key (PEM).
 // Wallet is an Oracle wallet folder: its cwallet.sso provides both the
 // trusted CAs and the client certificate.
+//
+// For CSV, Separator and Quote are single characters; empty means detected
+// from the file.
 type Connection struct {
 	Name     string `yaml:"name"`
 	Type     Type   `yaml:"type"`
@@ -147,6 +151,9 @@ type Connection struct {
 	User     string `yaml:"user,omitempty"`
 	Password string `yaml:"password,omitempty"`
 	Path     string `yaml:"path,omitempty"`
+
+	Separator string `yaml:"separator,omitempty"`
+	Quote     string `yaml:"quote,omitempty"`
 
 	SSLMode     SSLMode `yaml:"ssl_mode,omitempty"`
 	SSLRootCert string  `yaml:"ssl_root_cert,omitempty"`
@@ -177,6 +184,9 @@ func (c *Connection) Validate() error {
 	if c.Type.IsFile() {
 		if c.Path == "" {
 			return errors.New("file path is required")
+		}
+		if utf8.RuneCountInString(c.Separator) > 1 || utf8.RuneCountInString(c.Quote) > 1 {
+			return errors.New("the separator and the quote must be single characters")
 		}
 		return nil
 	}

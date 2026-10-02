@@ -540,6 +540,136 @@ func TestFileSources(t *testing.T) {
 	}
 }
 
+func TestFolderSource(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, data string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("orders.csv", "id,customer_id,amount\n1,1,10\n2,2,20\n3,1,5\n")
+	write("customers.csv", "id,name\n1,Ada\n2,Bob\n")
+	write("Orders.CSV", "id,customer_id,amount\n4,2,7\n") // same name as orders.csv but for case
+	write("notes.md", "not data")
+	write("other.tsv", "a\tb\n1\t2\n")
+	write("other.txt", "a,b\n1,2\n")
+	write(".hidden.csv", "a\n1\n")
+	os.Mkdir(filepath.Join(dir, "sub"), 0o700)
+	write("sub/nested.csv", "a\n1\n")
+
+	ctx := context.Background()
+	src, err := NewSource(config.Connection{Name: "folder", Type: config.CSV, Path: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	names := func() []string {
+		kids, err := src.Children(ctx, src.Root())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, k := range kids {
+			out = append(out, k.Name)
+		}
+		return out
+	}
+	if got, want := fmt.Sprint(names()), "[customers Orders orders_2]"; got != want {
+		t.Fatalf("views = %s, want %s", got, want)
+	}
+
+	sess, err := src.NewSession(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	var total float64
+	if err := queryRowScan(ctx, sess, `
+		SELECT sum(o.amount) FROM (SELECT * FROM orders_2 UNION ALL SELECT * FROM Orders) o
+		JOIN customers c ON c.id = o.customer_id WHERE c.name = 'Bob'`, &total); err != nil {
+		t.Fatal(err)
+	}
+	if total != 27 {
+		t.Errorf("total = %v, want 27", total)
+	}
+
+	info, err := src.Info(ctx, Node{Kind: KindView, Name: "customers", Object: "customers", Database: "memory", Schema: "main"})
+	if err != nil || len(info.Properties) != 1 || info.Properties[0][1] != filepath.Join(dir, "customers.csv") {
+		t.Fatalf("info=%+v err=%v", info, err)
+	}
+
+	// A refresh picks up new and removed files.
+	os.Remove(filepath.Join(dir, "Orders.CSV"))
+	write("products.csv", "id,name\n1,pen\n")
+	if got, want := fmt.Sprint(names()), "[customers orders products]"; got != want {
+		t.Errorf("views after refresh = %s, want %s", got, want)
+	}
+	if err := queryRowScan(ctx, sess, "SELECT sum(amount) FROM orders", &total); err != nil || total != 35 {
+		t.Errorf("total = %v, err = %v", total, err)
+	}
+}
+
+func TestFolderWithUnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+	db, _ := sql.Open("duckdb", "")
+	if _, err := db.Exec(fmt.Sprintf("COPY (SELECT 1 AS id) TO '%s' (FORMAT parquet)", filepath.Join(dir, "good.parquet"))); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	os.WriteFile(filepath.Join(dir, "bad.parquet"), []byte("not parquet"), 0o600)
+
+	src, _ := NewSource(config.Connection{Name: "pq", Type: config.Parquet, Path: dir})
+	defer src.Close()
+	// The folder still opens, and the tree gets the readable files and an
+	// error naming the other.
+	kids, err := src.Children(context.Background(), src.Root())
+	if err == nil || !strings.Contains(err.Error(), "bad.parquet") {
+		t.Errorf("expected an error naming bad.parquet, got %v", err)
+	}
+	if len(kids) != 1 || kids[0].Name != "good" {
+		t.Errorf("children = %+v", kids)
+	}
+}
+
+func TestCSVOptions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.csv")
+	os.WriteFile(path, []byte("name;note\n|Rossi; Mario|;x\n"), 0o600)
+	src, _ := NewSource(config.Connection{Name: "c", Type: config.CSV, Path: path, Separator: ";", Quote: "|"})
+	defer src.Close()
+	ctx := context.Background()
+	sess, err := src.NewSession(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	var name string
+	if err := queryRowScan(ctx, sess, "SELECT name FROM a", &name); err != nil || name != "Rossi; Mario" {
+		t.Errorf("name = %q, err = %v", name, err)
+	}
+}
+
+func TestOnlyCSVFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.tsv")
+	os.WriteFile(path, []byte("a\tb\n1\t2\n"), 0o600)
+	src, _ := NewSource(config.Connection{Name: "c", Type: config.CSV, Path: path})
+	defer src.Close()
+	if err := src.Ping(context.Background()); err == nil || !strings.Contains(err.Error(), "not a .csv file") {
+		t.Errorf("expected a .csv error, got %v", err)
+	}
+}
+
+func TestFileTableName(t *testing.T) {
+	for in, want := range map[string]string{
+		"/x/sales 2026.csv": "sales_2026",
+		"/x/2026.parquet":   "t_2026",
+	} {
+		if got := FileTableName(in); got != want {
+			t.Errorf("FileTableName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestMissingFileIsNotCreated(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing.db")
 	src, _ := NewSource(config.Connection{Name: "x", Type: config.SQLite, Path: path})

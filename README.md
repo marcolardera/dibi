@@ -6,7 +6,8 @@ alternative to DBeaver or DataGrip.
 
 Supported sources: **PostgreSQL**, **MySQL**, **MariaDB**, **Oracle** (no
 Instant Client needed), **SQL Server**, **SQLite**, **DuckDB**, and **CSV** /
-**Parquet** files (queried through DuckDB).
+**Parquet** files or folders of them (queried through DuckDB, one view per
+file, so they can be joined).
 
 See [spec.md](spec.md) for the full specification.
 

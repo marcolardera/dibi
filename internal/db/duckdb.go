@@ -3,9 +3,11 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -155,26 +157,26 @@ func (duckdb) indexes(ctx context.Context, db *sql.DB, n Node) ([]Index, error) 
 	return out, err
 }
 
-// fileDialect exposes a single CSV or Parquet file as a DuckDB view in an
-// in-memory database. The view is named after the file.
+// fileDialect exposes CSV or Parquet files as DuckDB views in an in-memory
+// database. The path is either a single file or a folder, whose files
+// (not those of subfolders) each become a view named after the file. The
+// view's comment holds the path of its file.
 type fileDialect struct{ duckdb }
 
 func (fileDialect) open(c config.Connection, _ string) (*sql.DB, error) {
-	if _, err := os.Stat(c.Path); err != nil {
+	fi, err := os.Stat(c.Path)
+	if err != nil {
 		return nil, err
 	}
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return nil, err
 	}
-	reader := "read_csv_auto"
-	if c.Type == config.Parquet {
-		reader = "read_parquet"
-	}
-	path := "'" + strings.ReplaceAll(c.Path, "'", "''") + "'"
 	// All connections of this pool share the same in-memory database.
-	_, err = db.Exec(fmt.Sprintf("CREATE VIEW %s AS SELECT * FROM %s(%s)", quoteDouble(FileTableName(c.Path)), reader, path))
-	if err != nil {
+	_, err = syncFileViews(context.Background(), db, c)
+	if err != nil && !fi.IsDir() {
+		// A folder stays usable when some of its files cannot be read; the
+		// tree reports them.
 		db.Close()
 		return nil, err
 	}
@@ -186,10 +188,139 @@ func (fileDialect) hasSchemas() bool   { return false }
 
 func (fileDialect) useDatabase(context.Context, *sql.Conn, string) error { return nil }
 
-// root returns the single table node of a file connection.
-func (fileDialect) root(c config.Connection) []Node {
-	name := FileTableName(c.Path)
-	return []Node{{Kind: KindView, Name: name, Object: name, Database: "memory", Schema: "main"}}
+// root rescans the files, so that refreshing the connection picks up files
+// added or removed since, and returns their views.
+func (fileDialect) root(ctx context.Context, db *sql.DB, c config.Connection) ([]Node, error) {
+	return syncFileViews(ctx, db, c)
+}
+
+// syncFileViews makes the views match the files of the connection: it
+// creates the missing ones and drops those whose file is gone. It returns
+// the views, and an error listing the files that could not be read.
+func syncFileViews(ctx context.Context, db *sql.DB, c config.Connection) ([]Node, error) {
+	files, err := dataFiles(c)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := queryRows(ctx, db, `
+		SELECT view_name, COALESCE(comment, '') FROM duckdb_views()
+		WHERE database_name = 'memory' AND schema_name = 'main' AND NOT internal`)
+	if err != nil {
+		return nil, err
+	}
+	// Names are compared in lower case, as DuckDB does. Views are dropped
+	// before creating others, which may take a name differing only in case.
+	names := fileViewNames(files)
+	wanted := map[string]string{} // lower-case view name → file
+	for i, f := range files {
+		wanted[strings.ToLower(names[i])] = f
+	}
+	kept := map[string]bool{}
+	var errs []error
+	for _, r := range rows {
+		if lower := strings.ToLower(r[0]); wanted[lower] == r[1] {
+			kept[lower] = true
+		} else if _, err := db.ExecContext(ctx, "DROP VIEW IF EXISTS "+quoteDouble(r[0])); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	var out []Node
+	for i, f := range files {
+		name := names[i]
+		if !kept[strings.ToLower(name)] {
+			quoted, path := quoteDouble(name), quoteSingle(f)
+			_, err := db.ExecContext(ctx, fmt.Sprintf("CREATE VIEW %s AS SELECT * FROM %s", quoted, fileReader(c, path)))
+			if err == nil {
+				_, err = db.ExecContext(ctx, fmt.Sprintf("COMMENT ON VIEW %s IS %s", quoted, path))
+			}
+			if err != nil {
+				db.ExecContext(ctx, "DROP VIEW IF EXISTS "+quoted)
+				errs = append(errs, fmt.Errorf("%s: %w", filepath.Base(f), err))
+				continue
+			}
+		}
+		out = append(out, Node{Kind: KindView, Name: name, Object: name, Database: "memory", Schema: "main"})
+	}
+	slices.SortFunc(out, func(a, b Node) int { return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)) })
+	return out, errors.Join(errs...)
+}
+
+// fileReader returns the table function call reading a file, given as a
+// quoted literal.
+func fileReader(c config.Connection, path string) string {
+	if c.Type == config.Parquet {
+		return "read_parquet(" + path + ")"
+	}
+	args := path
+	if c.Separator != "" {
+		args += ", delim = " + quoteSingle(c.Separator)
+	}
+	if c.Quote != "" {
+		args += ", quote = " + quoteSingle(c.Quote)
+	}
+	return "read_csv_auto(" + args + ")"
+}
+
+// dataFiles returns the path of a file connection, or the files of its
+// folder with an extension of the connection type, sorted by name.
+func dataFiles(c config.Connection) ([]string, error) {
+	fi, err := os.Stat(c.Path)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.IsDir() {
+		if c.Type == config.CSV && !hasDataExt(c.Type, c.Path) {
+			return nil, fmt.Errorf("%s is not a .csv file", filepath.Base(c.Path))
+		}
+		return []string{c.Path}, nil
+	}
+	entries, err := os.ReadDir(c.Path)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || !hasDataExt(c.Type, name) {
+			continue
+		}
+		path := filepath.Join(c.Path, name)
+		if fi, err := os.Stat(path); err != nil || !fi.Mode().IsRegular() { // follows symlinks
+			continue
+		}
+		out = append(out, path)
+	}
+	return out, nil
+}
+
+// DataExtension returns the extension of the files read by a CSV or
+// Parquet connection.
+func DataExtension(t config.Type) string {
+	if t == config.Parquet {
+		return ".parquet"
+	}
+	return ".csv"
+}
+
+func hasDataExt(t config.Type, name string) bool {
+	return strings.EqualFold(filepath.Ext(name), DataExtension(t))
+}
+
+// fileViewNames returns the view name of each file. DuckDB names are case
+// insensitive, so names differing only in case get a numeric suffix.
+func fileViewNames(files []string) []string {
+	taken := map[string]bool{}
+	out := make([]string, len(files))
+	for i, f := range files {
+		base := FileTableName(f)
+		name := base
+		for n := 2; taken[strings.ToLower(name)]; n++ {
+			name = fmt.Sprintf("%s_%d", base, n)
+		}
+		taken[strings.ToLower(name)] = true
+		out[i] = name
+	}
+	return out
 }
 
 func (f fileDialect) info(ctx context.Context, db *sql.DB, n Node) (*Info, error) {
@@ -200,7 +331,13 @@ func (f fileDialect) info(ctx context.Context, db *sql.DB, n Node) (*Info, error
 	info.Title = "File " + n.Name
 	info.Source = ""
 	info.setSelect(quoteDouble(n.Object), limitSyntax)
-	return info, nil
+	path, err := queryString(ctx, db, `
+		SELECT COALESCE(comment, '') FROM duckdb_views() WHERE database_name = ? AND schema_name = ? AND view_name = ?`,
+		n.Database, n.Schema, n.Object)
+	if path != "" {
+		info.Properties = append(info.Properties, [2]string{"File", path})
+	}
+	return info, err
 }
 
 // FileTableName returns the name under which a CSV/Parquet file is queried:

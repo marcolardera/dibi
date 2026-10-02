@@ -90,6 +90,11 @@ func quoteDouble(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
+// quoteSingle quotes a string literal.
+func quoteSingle(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
 // namedObjects builds leaf nodes of a kind from names.
 func namedObjects(k Kind, parent Node, names []string) []Node {
 	out := make([]Node, len(names))

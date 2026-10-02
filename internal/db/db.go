@@ -342,7 +342,7 @@ func (s *Source) Children(ctx context.Context, n Node) ([]Node, error) {
 	switch n.Kind {
 	case KindConnection:
 		if fd, ok := s.d.(fileDialect); ok {
-			return fd.root(s.Conn), nil
+			return fd.root(ctx, pool, s.Conn)
 		}
 		if s.d.hasDatabases() {
 			names, err := s.d.databases(ctx, pool)

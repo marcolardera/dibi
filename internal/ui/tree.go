@@ -261,11 +261,15 @@ func (t *objectTree) expand(item *qt.QTreeWidgetItem) {
 		e.loading = false
 		t.removeChildren(item)
 		if r.err != nil {
+			// Nodes come with an error when only some children failed to
+			// load (unreadable files of a folder): show both.
 			errItem := qt.NewQTreeWidgetItem7(item, []string{"Error: " + firstLine(r.err.Error(), 80)})
 			errItem.SetForeground(0, qt.NewQBrush3(qt.NewQColor6("#b00020")))
 			errItem.SetToolTip(0, r.err.Error())
 			t.app.setStatus(fmt.Sprintf("Cannot load %s: %v", node.Name, r.err))
-			return
+			if len(r.nodes) == 0 {
+				return
+			}
 		}
 		e.loaded = true
 		if len(r.nodes) == 0 {

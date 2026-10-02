@@ -147,3 +147,14 @@ func TestSSLMode(t *testing.T) {
 		t.Error("a client certificate without a key must be rejected")
 	}
 }
+
+func TestCSVOptionsValidate(t *testing.T) {
+	c := Connection{Name: "c", Type: CSV, Path: "/x.csv", Separator: ";", Quote: "\""}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c.Separator = ";;"
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected an error for a multi-character separator")
+	}
+}
