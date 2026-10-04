@@ -122,6 +122,28 @@ func (n Node) Key() string {
 	return fmt.Sprintf("%d|%s|%s|%s|%s|%d|%s", n.Kind, n.Database, n.Schema, n.Table, n.Object, n.Group, n.ID)
 }
 
+// Contains reports whether c is n itself or lies below n in the tree (both
+// of the same connection).
+func (n Node) Contains(c Node) bool {
+	switch n.Kind {
+	case KindConnection:
+		return true
+	case KindDatabase:
+		return c.Database == n.Database
+	case KindSchema:
+		return c.Database == n.Database && c.Schema == n.Schema
+	case KindGroup:
+		// The tables group also holds the indexes and triggers of its tables.
+		return c.Database == n.Database && c.Schema == n.Schema &&
+			(c.Kind == n.Group || n.Group == KindTable && c.Table != "")
+	case KindTable:
+		if c.Database == n.Database && c.Schema == n.Schema && c.Table == n.Object {
+			return true
+		}
+	}
+	return c.Key() == n.Key()
+}
+
 // Column describes a table or view column.
 type Column struct {
 	Name       string

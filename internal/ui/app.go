@@ -468,6 +468,16 @@ func (a *App) openInfo(conn string, node db.Node) {
 	a.tabs.SetCurrentIndex(idx)
 }
 
+// reloadInfoTabs reloads the info tabs of a connection showing node or an
+// object below it.
+func (a *App) reloadInfoTabs(conn string, node db.Node) {
+	for _, t := range a.infoTabs {
+		if t.conn == conn && node.Contains(t.node) {
+			t.reload()
+		}
+	}
+}
+
 func (a *App) closeInfoTabs(conn string) {
 	for i := a.tabs.Count() - 1; i >= 0; i-- {
 		if t := a.infoTabs[key(a.tabs.Widget(i).UnsafePointer())]; t != nil && t.conn == conn {
@@ -501,9 +511,7 @@ func (a *App) closeTab(i int) {
 		delete(a.sqlTabs, k)
 	}
 	if t := a.infoTabs[k]; t != nil {
-		if t.data != nil {
-			t.data.close()
-		}
+		t.dispose()
 		delete(a.infoTabs, k)
 	}
 	a.tabs.RemoveTab(a.tabs.IndexOf(w))

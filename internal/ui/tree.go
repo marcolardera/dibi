@@ -291,12 +291,14 @@ func (t *objectTree) expand(item *qt.QTreeWidgetItem) {
 	})
 }
 
-// refresh reloads the children of an item.
+// refresh reloads the children of an item and the open info tabs of the
+// objects below it.
 func (t *objectTree) refresh(item *qt.QTreeWidgetItem) {
 	e := t.entry(item)
 	if e == nil || e.loading {
 		return
 	}
+	t.app.reloadInfoTabs(e.conn, e.node)
 	t.removeChildren(item)
 	e.loaded = false
 	if item.IsExpanded() {
@@ -341,6 +343,8 @@ func (t *objectTree) contextMenu(pos *qt.QPoint) {
 	}
 	if e.node.HasChildren() {
 		add("Refresh", func() { t.refresh(item) })
+	} else if e.node.HasInfo() {
+		add("Refresh", func() { t.app.reloadInfoTabs(conn, e.node) })
 	}
 	if e.node.Kind == db.KindConnection {
 		menu.AddSeparator()

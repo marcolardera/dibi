@@ -191,6 +191,57 @@ func runAutopilot(a *App) {
 	}
 	p.check(ui(func() bool { return a.lastConn == "pg" && a.lastDB == "dibi" }), "last used = pg/dibi (got %s/%s)", a.lastConn, a.lastDB)
 
+	p.log("== Refresh reloads the open info tabs")
+	if t != nil {
+		rows := func() int {
+			return ui(func() int {
+				if t.data == nil || t.data.pager == nil {
+					return -1
+				}
+				return len(t.data.model.rows)
+			})
+		}
+		// refresh refreshes a tree node and waits for the preview to show want rows.
+		refresh := func(want int, path ...string) {
+			onUIWait(func() { a.tabs.SetCurrentWidget(t.widget) })
+			it := p.item(path...)
+			onUIWait(func() { a.tree.refresh(it) })
+			p.wait("preview reload", func() bool { return rows() == want })
+			p.check(rows() == want, "refresh of %s: %d rows", path[len(path)-1], rows())
+			p.check(ui(func() string { return t.inner.TabText(t.inner.CurrentIndex()) }) == previewTab, "preview sub-tab kept")
+		}
+		n := rows()
+		p.runScript("INSERT INTO dibi_test.orders VALUES (11, 2, 7);")
+		p.check(rows() == n, "preview unchanged before the refresh")
+		refresh(n+1, "pg", "dibi", "dibi_test", "Tables", "orders")
+		p.runScript("DELETE FROM dibi_test.orders WHERE id = 11;")
+		refresh(n, "pg", "dibi", "dibi_test")
+
+		// The Refresh button of the info tab reloads the details too.
+		indexes := func() int {
+			return ui(func() int {
+				for i := 0; i < t.inner.Count(); i++ {
+					if t.inner.TabText(i) == "Indexes" {
+						return qt.UnsafeNewQTableWidget(t.inner.Widget(i).UnsafePointer()).RowCount()
+					}
+				}
+				return -1
+			})
+		}
+		nx := indexes()
+		p.runScript("INSERT INTO dibi_test.orders VALUES (11, 2, 7);\n" +
+			"CREATE INDEX orders_amount_ix ON dibi_test.orders(amount);")
+		onUIWait(func() { a.tabs.SetCurrentWidget(t.widget) })
+		p.check(ui(t.refresh.IsVisible), "Refresh button visible")
+		onUIWait(t.refresh.Click)
+		p.wait("preview reload", func() bool { return rows() == n+1 })
+		p.check(rows() == n+1, "Refresh button reloads the preview: %d rows", rows())
+		p.check(indexes() == nx+1, "Refresh button reloads the indexes: %d → %d", nx, indexes())
+		p.check(ui(func() string { return t.inner.TabText(t.inner.CurrentIndex()) }) == previewTab, "preview sub-tab kept")
+		p.shot("19-info-refresh")
+		p.runScript("DELETE FROM dibi_test.orders WHERE id = 11;\nDROP INDEX dibi_test.orders_amount_ix;")
+	}
+
 	p.log("== Tree filter")
 	p.item("pg", "dibi", "dibi_test", "Tables", "customers") // loads the Tables group
 	shown := func(path ...string) bool {

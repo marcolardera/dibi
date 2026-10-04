@@ -135,6 +135,8 @@ Left click opens the information panel with the detailed information about the o
 - For views, stored procedures and functions: the **source code**, shown read-only with syntax highlighting.
 - A data preview of the first 50 rows (tables and views).
 
+The panel is not live: its **Refresh** button (right of the sub-tabs) reloads the details and the preview, keeping the visible sub-tab. **Refresh** on a tree node (connection, database, schema, group, table, or any object in its context menu) reloads that node's children and also the open panels of the objects under it, so a preview reflects data changed by a script.
+
 The preview query uses the right syntax for each database type (e.g. `LIMIT 50`, `FETCH FIRST 50 ROWS ONLY` on Oracle, `SELECT TOP 50` on SQL Server).
 
 ### New Connection window

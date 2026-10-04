@@ -40,3 +40,34 @@ func TestQualifiedName(t *testing.T) {
 		}
 	}
 }
+
+func TestNodeContains(t *testing.T) {
+	orders := Node{Kind: KindTable, Name: "orders", Object: "orders", Database: "shop", Schema: "public"}
+	idx := Node{Kind: KindIndex, Object: "orders_pk", Database: "shop", Schema: "public", Table: "orders"}
+	view := Node{Kind: KindView, Object: "v", Database: "shop", Schema: "public"}
+	other := Node{Kind: KindTable, Object: "orders", Database: "shop", Schema: "audit"}
+	cases := []struct {
+		parent, child Node
+		want          bool
+	}{
+		{Node{Kind: KindConnection}, other, true},
+		{Node{Kind: KindDatabase, Database: "shop"}, orders, true},
+		{Node{Kind: KindDatabase, Database: "crm"}, orders, false},
+		{Node{Kind: KindSchema, Database: "shop", Schema: "public"}, orders, true},
+		{Node{Kind: KindSchema, Database: "shop", Schema: "public"}, other, false},
+		{Node{Kind: KindGroup, Group: KindTable, Database: "shop", Schema: "public"}, orders, true},
+		{Node{Kind: KindGroup, Group: KindTable, Database: "shop", Schema: "public"}, idx, true},
+		{Node{Kind: KindGroup, Group: KindTable, Database: "shop", Schema: "public"}, view, false},
+		{Node{Kind: KindGroup, Group: KindView, Database: "shop", Schema: "public"}, view, true},
+		{orders, orders, true},
+		{orders, idx, true},
+		{orders, other, false},
+		{orders, view, false},
+		{view, view, true},
+	}
+	for i, c := range cases {
+		if got := c.parent.Contains(c.child); got != c.want {
+			t.Errorf("case %d: %v contains %v = %v, want %v", i, c.parent, c.child, got, c.want)
+		}
+	}
+}

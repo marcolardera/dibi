@@ -19,7 +19,8 @@ See [spec.md](spec.md) for the full specification.
   A filter box narrows it as you type.
 - Information panel: columns (type, nullability, key, default, comment),
   constraints, indexes, source code of views/routines/triggers, and a
-  50-row data preview.
+  50-row data preview. Its **Refresh** button reloads it all; refreshing a
+  node in the tree also reloads the open panels of the objects under it.
 - `Ctrl+C` on a table or view in the tree copies its query-ready name
   (e.g. `schema.table`, quoted where needed).
 - SQL editor with syntax highlighting, line numbers and find/replace

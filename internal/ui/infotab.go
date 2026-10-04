@@ -22,9 +22,13 @@ type infoTab struct {
 	node   db.Node
 	src    *db.Source
 
-	title *qt.QLabel
-	inner *qt.QTabWidget
-	data  *resultView
+	title   *qt.QLabel
+	inner   *qt.QTabWidget
+	data    *resultView
+	refresh *qt.QToolButton
+
+	gen     int    // incremented by reload and dispose: older loads are dropped
+	current string // sub-tab to show again after a reload
 }
 
 func newInfoTab(app *App, conn string, src *db.Source, node db.Node) *infoTab {
@@ -41,12 +45,49 @@ func newInfoTab(app *App, conn string, src *db.Source, node db.Node) *infoTab {
 	t.inner = qt.NewQTabWidget2()
 	t.inner.SetDocumentMode(true)
 	t.inner.OnCurrentChanged(func(int) { app.refreshChrome() })
+	t.refresh = qt.NewQToolButton2()
+	t.refresh.SetIcon(icon("view-refresh", qt.QStyle__SP_BrowserReload))
+	t.refresh.SetText("Refresh")
+	t.refresh.SetToolTip("Reload the details and the data preview")
+	t.refresh.SetToolButtonStyle(qt.ToolButtonTextBesideIcon)
+	t.refresh.SetAutoRaise(true)
+	t.refresh.OnClicked(t.reload)
+	t.inner.SetCornerWidget2(t.refresh.QWidget, qt.TopRightCorner)
 	layout.AddWidget(t.inner.QWidget)
 	t.load()
 	return t
 }
 
+// reload loads the details and the data preview again, keeping the
+// visible sub-tab.
+func (t *infoTab) reload() {
+	t.gen++
+	if i := t.inner.CurrentIndex(); i >= 0 {
+		t.current = t.inner.TabText(i)
+	}
+	if t.data != nil {
+		t.data.close()
+		t.data = nil
+	}
+	for t.inner.Count() > 0 {
+		w := t.inner.Widget(0)
+		t.inner.RemoveTab(0)
+		w.DeleteLater()
+	}
+	t.load()
+	t.app.refreshChrome()
+}
+
+// dispose drops the loads in progress, before the tab is closed.
+func (t *infoTab) dispose() {
+	t.gen++
+	if t.data != nil {
+		t.data.close()
+	}
+}
+
 func (t *infoTab) load() {
+	gen := t.gen
 	type result struct {
 		info *db.Info
 		err  error
@@ -57,6 +98,9 @@ func (t *infoTab) load() {
 		info, err := t.src.Info(ctx, t.node)
 		return result{info, err}
 	}, func(r result) {
+		if t.gen != gen {
+			return
+		}
 		if r.err != nil {
 			t.title.SetText(db.KindLabel(t.node.Kind) + " " + t.node.Name)
 			msg := qt.NewQPlainTextEdit2()
@@ -132,10 +176,16 @@ func (t *infoTab) build(info *db.Info) {
 	if t.inner.Count() == 0 {
 		t.inner.AddTab(qt.NewQLabel3("No details available for this object.").QWidget, "Details")
 	}
+	for i := 0; i < t.inner.Count(); i++ {
+		if t.inner.TabText(i) == t.current {
+			t.inner.SetCurrentIndex(i)
+		}
+	}
 	t.app.refreshChrome()
 }
 
 func (t *infoTab) loadPreview(query string) {
+	gen := t.gen
 	type result struct {
 		p    *pager.Pager
 		rows [][]any
@@ -156,6 +206,9 @@ func (t *infoTab) loadPreview(query string) {
 		p.Close()
 		return result{p, rows, err}
 	}, func(r result) {
+		if t.gen != gen {
+			return
+		}
 		if r.err != nil {
 			idx := t.inner.IndexOf(t.data.widget())
 			msg := qt.NewQPlainTextEdit2()
