@@ -47,14 +47,99 @@ func newCodeEditor() *codeEditor {
 		e.find.place()
 	})
 	e.OnKeyPressEvent(e.keyPress)
+	e.OnContextMenuEvent(func(_ func(*qt.QContextMenuEvent), ev *qt.QContextMenuEvent) {
+		menu := e.CreateStandardContextMenuWithPosition(ev.Pos())
+		menu.AddSeparator()
+		act := menu.QWidget.AddActionWithText("Toggle Comment")
+		act.SetShortcut(qt.NewQKeySequence2("Ctrl+K")) // shown as a hint
+		act.OnTriggered(e.toggleComment)
+		menu.ExecWithPos(ev.GlobalPos())
+		menu.DeleteLater()
+	})
 	return e
+}
+
+// toggleComment comments the lines of the selection, or the current line,
+// with "--", or uncomments them if they all are, in one undoable edit.
+func (e *codeEditor) toggleComment() {
+	cur := e.TextCursor()
+	doc := e.Document()
+	first, last := doc.FindBlock(cur.SelectionStart()), doc.FindBlock(cur.SelectionEnd())
+	if cur.HasSelection() && last.BlockNumber() > first.BlockNumber() && cur.SelectionEnd() == last.Position() {
+		last = last.Previous() // a selection ending at the start of a line leaves it out
+	}
+	var lines []string
+	for b := first; b.IsValid() && b.BlockNumber() <= last.BlockNumber(); b = b.Next() {
+		lines = append(lines, b.Text())
+	}
+	toggled := toggleComments(lines)
+	if strings.Join(toggled, "\n") == strings.Join(lines, "\n") {
+		return
+	}
+	hadSelection, col := cur.HasSelection(), cur.PositionInBlock()
+	start := first.Position()
+	cur.SetPosition(start)
+	cur.SetPosition2(last.Position()+last.Length()-1, qt.QTextCursor__KeepAnchor)
+	cur.InsertText(strings.Join(toggled, "\n"))
+	if hadSelection {
+		cur.SetPosition2(start, qt.QTextCursor__KeepAnchor)
+	} else {
+		// Keep the cursor on the same text, unless it was in the indentation.
+		before, after := utf16.Encode([]rune(lines[0])), utf16.Encode([]rune(toggled[0]))
+		indent := len(utf16.Encode([]rune(lines[0][:len(lines[0])-len(strings.TrimLeft(lines[0], " \t"))])))
+		if col > indent {
+			col = max(col+len(after)-len(before), indent)
+		}
+		cur.SetPosition(start + min(col, len(after)))
+	}
+	e.SetTextCursor(cur)
+}
+
+// toggleComments removes the "--" (and one space after it) from lines if
+// every non-blank one starts with it; otherwise it adds "-- " to every
+// non-blank line, at the smallest indentation so the lines stay aligned.
+// Lines that already are comments get a second "--", so toggling twice
+// gives back the original text.
+func toggleComments(lines []string) []string {
+	indent, commented := -1, true
+	for _, l := range lines {
+		trimmed := strings.TrimLeft(l, " \t")
+		if trimmed == "" {
+			continue
+		}
+		if n := len(l) - len(trimmed); indent < 0 || n < indent {
+			indent = n
+		}
+		commented = commented && strings.HasPrefix(trimmed, "--")
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		trimmed := strings.TrimLeft(l, " \t")
+		switch {
+		case trimmed == "" || indent < 0:
+			out[i] = l
+		case commented:
+			ws := l[:len(l)-len(trimmed)]
+			trimmed = strings.TrimPrefix(trimmed, "--")
+			out[i] = ws + strings.TrimPrefix(trimmed, " ")
+		default:
+			out[i] = l[:indent] + "-- " + l[indent:]
+		}
+	}
+	return out
 }
 
 // keyPress closes brackets and quotes as they are typed: an opening
 // character also inserts its closing one, typing a closing character over
 // an equal one moves past it, Backspace between an empty pair deletes
 // both, and an opening character typed over a selection wraps it.
+// Ctrl+K toggles comments; it is handled here because the text edit
+// claims it (delete to end of line) before any shortcut sees it.
 func (e *codeEditor) keyPress(super func(*qt.QKeyEvent), ev *qt.QKeyEvent) {
+	if qt.Key(ev.Key()) == qt.Key_K && ev.Modifiers() == qt.ControlModifier {
+		e.toggleComment()
+		return
+	}
 	cur := e.TextCursor()
 	if ev.Modifiers()&^(qt.ShiftModifier|qt.KeypadModifier) != 0 {
 		super(ev)

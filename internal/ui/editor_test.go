@@ -86,3 +86,40 @@ func TestEmptyPair(t *testing.T) {
 		}
 	}
 }
+
+func TestToggleComments(t *testing.T) {
+	tests := []struct{ in, want []string }{
+		{[]string{"select 1"}, []string{"-- select 1"}},
+		{[]string{"-- select 1"}, []string{"select 1"}},
+		{[]string{"--select 1"}, []string{"select 1"}},
+		{[]string{"--  select 1"}, []string{" select 1"}}, // one space only
+		{[]string{""}, []string{""}},
+		{[]string{"  "}, []string{"  "}},
+		{ // aligned at the smallest indentation, blank lines untouched
+			[]string{"select a,", "", "    b", "  from t"},
+			[]string{"-- select a,", "", "--     b", "--   from t"},
+		},
+		{
+			[]string{"  where a = 1", "    and b = 2"},
+			[]string{"  -- where a = 1", "  --   and b = 2"},
+		},
+		{
+			[]string{"  -- where a = 1", "", "  --   and b = 2"},
+			[]string{"  where a = 1", "", "    and b = 2"},
+		},
+		{ // mixed: comment all, so toggling back restores the comment
+			[]string{"-- some filter", "where a in (1,2,3)"},
+			[]string{"-- -- some filter", "-- where a in (1,2,3)"},
+		},
+		{
+			[]string{"-- -- some filter", "-- where a in (1,2,3)"},
+			[]string{"-- some filter", "where a in (1,2,3)"},
+		},
+		{[]string{"\tselect 1"}, []string{"\t-- select 1"}},
+	}
+	for _, tt := range tests {
+		if got := toggleComments(tt.in); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("toggleComments(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}

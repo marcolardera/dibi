@@ -23,8 +23,9 @@ See [spec.md](spec.md) for the full specification.
   node in the tree also reloads the open panels of the objects under it.
 - `Ctrl+C` on a table or view in the tree copies its query-ready name
   (e.g. `schema.table`, quoted where needed).
-- SQL editor with syntax highlighting, line numbers and find/replace
-  (`Ctrl+F`, `Ctrl+H`). **Run** (`Ctrl+Enter`) executes the
+- SQL editor with syntax highlighting, line numbers, find/replace
+  (`Ctrl+F`, `Ctrl+H`), auto-closed brackets and quotes, and comment
+  toggling (`Ctrl+K`). **Run** (`Ctrl+Enter`) executes the
   selection, or the whole script statement by statement; each result set
   gets its own tab. Each editor tab has its own database session.
 - New scripts default to the connection (and database) you used last.
