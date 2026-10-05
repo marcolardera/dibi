@@ -152,7 +152,7 @@ The preview query uses the right syntax for each database type (e.g. `LIMIT 50`,
 - Syntax highlighting for ANSI SQL keywords, strings, numbers and comments.
 - Line numbers in a gutter on the left; the number of the current line is darker.
 - **Find and replace** in a small box over the top-right corner of the editor. `Ctrl+F` opens it for finding, `Ctrl+H` with the replace row (a toggle shows or hides it); a selection on one line becomes the search text. Plain text only (no regular expressions), case-insensitive unless "Aa" (match case) is on. It finds as you type, highlights every match, shows "N of M" and wraps around. `Enter`/`F3` go to the next match, `Shift+Enter`/`Shift+F3` to the previous one, `Esc` closes the box. "Replace" replaces the selected match and moves to the next; "Replace All" replaces every match in one undoable step.
-- No autocomplete.
+- **Brackets and quotes close automatically**: typing `(`, `[`, `{`, `'` or `"` also inserts `)`, `]`, `}`, `'` or `"` after the cursor. The pair is inserted only before a blank, the end of the line, a closing bracket, `,` or `;`, so typing before a word adds no stray character; quotes are not paired right after a word or a quote (`N'…'`, `'it''s'`). Typing a closing character in front of the same one moves past it, and `Backspace` between an empty pair deletes both. Typing an opening character over a selection wraps it in the pair (in one undoable step) and keeps it selected.
 - Each SQL editor tab has a **connection selector** (dropdown) at the top.
 - Each SQL editor tab opens its **own database session** (separate connection), so tabs never block each other and Stop only affects the current tab.
 - **Run** executes the current selection, if any; otherwise the whole content of the tab.

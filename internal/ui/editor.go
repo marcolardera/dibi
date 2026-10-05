@@ -46,7 +46,117 @@ func newCodeEditor() *codeEditor {
 		e.gutter.SetGeometry(cr.Left(), cr.Top(), e.gutterWidth(), cr.Height())
 		e.find.place()
 	})
+	e.OnKeyPressEvent(e.keyPress)
 	return e
+}
+
+// keyPress closes brackets and quotes as they are typed: an opening
+// character also inserts its closing one, typing a closing character over
+// an equal one moves past it, Backspace between an empty pair deletes
+// both, and an opening character typed over a selection wraps it.
+func (e *codeEditor) keyPress(super func(*qt.QKeyEvent), ev *qt.QKeyEvent) {
+	cur := e.TextCursor()
+	if ev.Modifiers()&^(qt.ShiftModifier|qt.KeypadModifier) != 0 {
+		super(ev)
+		return
+	}
+	if cur.HasSelection() {
+		if text := []rune(ev.Text()); len(text) == 1 && closers[text[0]] != 0 {
+			e.wrapSelection(cur, text[0])
+			return
+		}
+		super(ev)
+		return
+	}
+	line, col := utf16.Encode([]rune(cur.Block().Text())), cur.PositionInBlock()
+	if qt.Key(ev.Key()) == qt.Key_Backspace {
+		if emptyPair(line, col) {
+			cur.MovePosition(qt.QTextCursor__PreviousCharacter)
+			cur.MovePosition3(qt.QTextCursor__NextCharacter, qt.QTextCursor__KeepAnchor, 2)
+			cur.RemoveSelectedText()
+			return
+		}
+		super(ev)
+		return
+	}
+	text := []rune(ev.Text())
+	if len(text) != 1 {
+		super(ev)
+		return
+	}
+	switch autoPair(line, col, text[0]) {
+	case pairSkip:
+		cur.MovePosition(qt.QTextCursor__NextCharacter)
+		e.SetTextCursor(cur)
+	case pairInsert:
+		cur.InsertText(string(text[0]) + string(closers[text[0]]))
+		cur.MovePosition(qt.QTextCursor__PreviousCharacter)
+		e.SetTextCursor(cur)
+	default:
+		super(ev)
+	}
+}
+
+// wrapSelection puts the selection between open and its closing
+// character, in one undoable edit, and keeps the wrapped text selected.
+func (e *codeEditor) wrapSelection(cur *qt.QTextCursor, open rune) {
+	start, end := cur.SelectionStart(), cur.SelectionEnd()
+	cur.BeginEditBlock()
+	cur.SetPosition(end) // the end first, so start stays valid
+	cur.InsertText(string(closers[open]))
+	cur.SetPosition(start)
+	cur.InsertText(string(open))
+	cur.EndEditBlock()
+	cur.SetPosition(start + 1)
+	cur.SetPosition2(end+1, qt.QTextCursor__KeepAnchor)
+	e.SetTextCursor(cur)
+}
+
+// closers maps each auto-closed character to its closing one.
+var closers = map[rune]rune{'(': ')', '[': ']', '{': '}', '\'': '\'', '"': '"'}
+
+type pairAction int
+
+const (
+	pairNone   pairAction = iota // type the character as usual
+	pairSkip                     // move past the equal closing character
+	pairInsert                   // insert the character and its closing one
+)
+
+// autoPair decides what typing ch does at UTF-16 column col of line.
+// Pairs are inserted only before blanks, closing brackets and separators,
+// so typing before a word does not leave a stray closing character; quotes
+// are not paired after a word or a quote either, as in N'x' or a doubled
+// quote inside a string.
+func autoPair(line []uint16, col int, ch rune) pairAction {
+	var prev, next rune
+	if col > 0 {
+		prev = rune(line[col-1])
+	}
+	if col < len(line) {
+		next = rune(line[col])
+	}
+	if ch == next && strings.ContainsRune(")]}'\"", ch) {
+		return pairSkip
+	}
+	closing, ok := closers[ch]
+	if !ok || next != 0 && !unicode.IsSpace(next) && !strings.ContainsRune(")]},;", next) {
+		return pairNone
+	}
+	if closing == ch && (prev == ch || prev == '_' || unicode.IsLetter(prev) || unicode.IsDigit(prev)) {
+		return pairNone
+	}
+	return pairInsert
+}
+
+// emptyPair reports whether UTF-16 column col of line sits between an
+// opening character and its closing one.
+func emptyPair(line []uint16, col int) bool {
+	if col == 0 || col >= len(line) {
+		return false
+	}
+	closing, ok := closers[rune(line[col-1])]
+	return ok && closing == rune(line[col])
 }
 
 // gutterWidth fits the largest line number, with at least 3 digits.
