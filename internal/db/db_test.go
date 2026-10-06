@@ -338,6 +338,7 @@ func testSource(t *testing.T, f fixture) {
 	if !strings.Contains(strings.ToLower(vinfo.Source), "join") || len(vinfo.Columns) != 2 {
 		t.Errorf("unexpected view info: %q %+v", vinfo.Source, vinfo.Columns)
 	}
+	testEditView(t, ctx, src, f, child(t, ctx, src, views, f.name("v_orders")), vinfo.EditScript)
 
 	// Routines, packages and sequences.
 	for kind, name := range f.routes {
@@ -361,6 +362,34 @@ func testSource(t *testing.T, f fixture) {
 	}
 
 	testSession(t, ctx, src, f)
+}
+
+// testEditView runs the edit script of a view, changed to add a column, on
+// a session bound to the database of the view, like the editor does.
+func testEditView(t *testing.T, ctx context.Context, src *Source, f fixture, view Node, script string) {
+	t.Logf("edit script: %q", script)
+	i := strings.LastIndex(strings.ToLower(script), "o.amount")
+	if i < 0 {
+		t.Fatalf("unexpected edit script %q", script)
+	}
+	script = script[:i] + "o.amount, o.id" + script[i+len("o.amount"):]
+	sess, err := src.NewSession(ctx, view.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	for _, st := range sqlsplit.Split(script, src.SplitDialect()) {
+		if _, err := sess.ExecContext(ctx, st.Text); err != nil {
+			t.Fatalf("edit script: %v\n  in: %s", err, st.Text)
+		}
+	}
+	info, err := src.Info(ctx, view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Columns) != 3 {
+		t.Errorf("edited view has columns %+v", info.Columns)
+	}
 }
 
 // testSession checks sessions keep state and survive cancellation.

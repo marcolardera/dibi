@@ -96,6 +96,7 @@ func (d duckdb) info(ctx context.Context, db *sql.DB, n Node) (*Info, error) {
 			info.Source, err = queryString(ctx, db, `
 				SELECT sql FROM duckdb_views() WHERE database_name = ? AND schema_name = ? AND view_name = ?`,
 				n.Database, n.Schema, n.Object)
+			info.EditScript = orReplace(info.Source)
 		}
 	case KindIndex:
 		info.Title = objectTitle(n, n.Database+"."+n.Schema+"."+n.Name+" on "+n.Table)
@@ -329,7 +330,7 @@ func (f fileDialect) info(ctx context.Context, db *sql.DB, n Node) (*Info, error
 		return nil, err
 	}
 	info.Title = "File " + n.Name
-	info.Source = ""
+	info.Source, info.EditScript = "", ""
 	info.setSelect(quoteDouble(n.Object), limitSyntax)
 	path, err := queryString(ctx, db, `
 		SELECT COALESCE(comment, '') FROM duckdb_views() WHERE database_name = ? AND schema_name = ? AND view_name = ?`,

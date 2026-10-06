@@ -143,6 +143,7 @@ func (m mysqlDialect) info(ctx context.Context, db *sql.DB, n Node) (*Info, erro
 			info.Indexes, err = m.indexes(ctx, db, n)
 		} else {
 			info.Source, err = showCreate(ctx, db, "SHOW CREATE VIEW "+qualified, 1)
+			info.EditScript = orReplace(info.Source)
 		}
 	case KindProcedure:
 		info.Source, err = showCreate(ctx, db, "SHOW CREATE PROCEDURE "+qualified, 2)

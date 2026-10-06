@@ -160,6 +160,7 @@ func (m mssqlDialect) info(ctx context.Context, db *sql.DB, n Node) (*Info, erro
 		info.setSelectTop(qualified)
 		if n.Kind == KindView {
 			info.Source, err = m.module(ctx, db, n.Schema, n.Object)
+			info.EditScript = alterView(info.Source)
 			break
 		}
 		if info.Constraints, err = m.constraints(ctx, db, n); err != nil {
@@ -204,6 +205,18 @@ func (m mssqlDialect) info(ctx context.Context, db *sql.DB, n Node) (*Info, erro
 
 // module returns the source of a view, routine or trigger: the original
 // CREATE statement.
+// alterView turns the definition of a view into an ALTER VIEW statement,
+// which keeps its permissions (CREATE OR ALTER needs SQL Server 2016 SP1),
+// or returns "".
+func alterView(def string) string {
+	for _, kw := range []string{"CREATE OR ALTER VIEW", "CREATE VIEW"} {
+		if before, after, ok := cutLeading(def, kw); ok {
+			return before + "ALTER VIEW" + after
+		}
+	}
+	return ""
+}
+
 func (mssqlDialect) module(ctx context.Context, db *sql.DB, schema, name string) (string, error) {
 	def, err := queryString(ctx, db, `SELECT definition FROM sys.sql_modules WHERE object_id = `+objectID, schema, name)
 	if err == nil && def == "" {

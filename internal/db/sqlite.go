@@ -89,6 +89,7 @@ func (s sqlite) info(ctx context.Context, db *sql.DB, n Node) (*Info, error) {
 			info.Indexes, err = s.indexes(ctx, db, n.Database, n.Object)
 		} else {
 			info.Source, err = s.sql(ctx, db, n.Database, n.Object)
+			info.EditScript = sqliteEditView(info.Source, n.Database, qualified)
 		}
 	case KindTrigger:
 		info.Title = objectTitle(n, n.Database+"."+n.Name+" on "+n.Table)
@@ -108,6 +109,19 @@ func (s sqlite) info(ctx context.Context, db *sql.DB, n Node) (*Info, error) {
 		}
 	}
 	return info, err
+}
+
+// sqliteEditView returns a script that drops and recreates a view, since
+// SQLite has no CREATE OR REPLACE VIEW, or "". The stored definition has
+// no schema name, so it is added: the view stays in its database.
+func sqliteEditView(def, database, qualified string) string {
+	for _, kw := range []string{"CREATE VIEW IF NOT EXISTS", "CREATE VIEW"} {
+		if before, after, ok := cutLeading(def, kw); ok {
+			return "DROP VIEW IF EXISTS " + qualified + ";\n" +
+				before + "CREATE VIEW " + quoteDouble(database) + "." + strings.TrimLeft(after, " \t\r\n")
+		}
+	}
+	return ""
 }
 
 func (sqlite) sql(ctx context.Context, db *sql.DB, database, name string) (string, error) {

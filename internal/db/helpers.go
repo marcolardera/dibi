@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // queryer is implemented by *sql.DB and *sql.Conn.
@@ -128,6 +129,59 @@ func indexDefinition(name, table string, unique bool, columns string) string {
 		u = "UNIQUE "
 	}
 	return fmt.Sprintf("CREATE %sINDEX %s ON %s (%s)", u, name, table, columns)
+}
+
+// cutLeading reports whether a statement starts with the given keywords
+// (matched case-insensitively, skipping whitespace and comments), and
+// returns the text before and after them.
+func cutLeading(stmt, keywords string) (before, after string, ok bool) {
+	start, i := -1, 0
+	for _, kw := range strings.Fields(keywords) {
+		i = skipBlanks(stmt, i)
+		if start < 0 {
+			start = i
+		}
+		end := i + len(kw)
+		if end > len(stmt) || !strings.EqualFold(stmt[i:end], kw) ||
+			end < len(stmt) && (stmt[end] == '_' || unicode.IsLetter(rune(stmt[end])) || unicode.IsDigit(rune(stmt[end]))) {
+			return "", "", false
+		}
+		i = end
+	}
+	return stmt[:start], stmt[i:], true
+}
+
+// skipBlanks skips whitespace and comments from position i.
+func skipBlanks(s string, i int) int {
+	for i < len(s) {
+		switch {
+		case unicode.IsSpace(rune(s[i])):
+			i++
+		case strings.HasPrefix(s[i:], "--"):
+			j := strings.IndexByte(s[i:], '\n')
+			if j < 0 {
+				return len(s)
+			}
+			i += j + 1
+		case strings.HasPrefix(s[i:], "/*"):
+			j := strings.Index(s[i+2:], "*/")
+			if j < 0 {
+				return len(s)
+			}
+			i += j + 4
+		default:
+			return i
+		}
+	}
+	return i
+}
+
+// orReplace turns a CREATE statement into CREATE OR REPLACE, or returns "".
+func orReplace(stmt string) string {
+	if before, after, ok := cutLeading(stmt, "CREATE"); ok {
+		return before + "CREATE OR REPLACE" + after
+	}
+	return ""
 }
 
 // objectTitle builds the title of an info panel.

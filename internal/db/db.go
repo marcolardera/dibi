@@ -177,6 +177,7 @@ type Info struct {
 	Indexes     []Index
 	Properties  [][2]string
 	Source      string
+	EditScript  string // script that redefines the object, for the editor, or ""
 	Preview     string // SQL returning the first PreviewRows rows, or ""
 	SelectAll   string // SQL returning all rows (used by export), or ""
 }

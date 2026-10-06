@@ -144,6 +144,7 @@ func (p postgres) info(ctx context.Context, db *sql.DB, n Node) (*Info, error) {
 			var def string
 			def, err = queryString(ctx, db, `SELECT pg_get_viewdef(to_regclass($1), true)`, qualified)
 			info.Source = "CREATE OR REPLACE VIEW " + qualified + " AS\n" + def
+			info.EditScript = info.Source
 		case KindMatView:
 			var def string
 			def, err = queryString(ctx, db, `SELECT pg_get_viewdef(to_regclass($1), true)`, qualified)

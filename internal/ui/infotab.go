@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"dibi/internal/db"
@@ -26,6 +27,8 @@ type infoTab struct {
 	inner   *qt.QTabWidget
 	data    *resultView
 	refresh *qt.QToolButton
+	edit    *qt.QToolButton
+	script  string // script opened by the edit button
 
 	gen     int    // incremented by reload and dispose: older loads are dropped
 	current string // sub-tab to show again after a reload
@@ -52,7 +55,17 @@ func newInfoTab(app *App, conn string, src *db.Source, node db.Node) *infoTab {
 	t.refresh.SetToolButtonStyle(qt.ToolButtonTextBesideIcon)
 	t.refresh.SetAutoRaise(true)
 	t.refresh.OnClicked(t.reload)
-	t.inner.SetCornerWidget2(t.refresh.QWidget, qt.TopRightCorner)
+	t.edit = qt.NewQToolButton2()
+	t.edit.SetIcon(icon("document-edit", qt.QStyle__SP_FileDialogContentsView))
+	t.edit.SetText("Edit " + strings.ToLower(db.KindLabel(node.Kind)))
+	t.edit.SetToolTip("Open the definition in a new SQL script, ready to be changed and run")
+	t.edit.SetToolButtonStyle(qt.ToolButtonTextBesideIcon)
+	t.edit.SetAutoRaise(true)
+	t.edit.SetVisible(false)
+	t.edit.OnClicked(t.editScript)
+	corner := qt.NewQWidget2()
+	corner.SetLayout(hbox(t.edit.QWidget, t.refresh.QWidget).QLayout)
+	t.inner.SetCornerWidget2(corner, qt.TopRightCorner)
 	layout.AddWidget(t.inner.QWidget)
 	t.load()
 	return t
@@ -74,8 +87,16 @@ func (t *infoTab) reload() {
 		t.inner.RemoveTab(0)
 		w.DeleteLater()
 	}
+	t.edit.SetVisible(false)
 	t.load()
 	t.app.refreshChrome()
+}
+
+// editScript opens the script redefining the object in a new SQL editor,
+// bound to the connection and database of the object.
+func (t *infoTab) editScript() {
+	t.app.setLastUsed(t.conn, t.node.Database)
+	t.app.newScript(t.script, "")
 }
 
 // dispose drops the loads in progress, before the tab is closed.
@@ -116,6 +137,8 @@ func (t *infoTab) load() {
 
 func (t *infoTab) build(info *db.Info) {
 	t.title.SetText(info.Title + "   ·   " + t.conn)
+	t.script = info.EditScript
+	t.edit.SetVisible(t.script != "")
 	if len(info.Columns) > 0 {
 		rows := make([][]string, len(info.Columns))
 		for i, c := range info.Columns {

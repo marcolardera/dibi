@@ -119,6 +119,7 @@ func (o oracle) info(ctx context.Context, db *sql.DB, n Node) (*Info, error) {
 			var text string
 			text, err = queryString(ctx, db, `SELECT text FROM all_views WHERE owner = :1 AND view_name = :2`, n.Schema, n.Object)
 			info.Source = "CREATE OR REPLACE VIEW " + qualified + " AS\n" + strings.TrimSpace(text)
+			info.EditScript = info.Source
 		case KindMatView:
 			var text string
 			text, err = queryString(ctx, db, `SELECT query FROM all_mviews WHERE owner = :1 AND mview_name = :2`, n.Schema, n.Object)
