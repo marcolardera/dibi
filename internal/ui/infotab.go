@@ -238,7 +238,7 @@ func stringTable(headers []string, rows [][]string) *qt.QTableWidget {
 	tw := qt.NewQTableWidget3(len(rows), len(headers))
 	tw.SetHorizontalHeaderLabels(headers)
 	tw.SetEditTriggers(qt.QAbstractItemView__NoEditTriggers)
-	tw.SetAlternatingRowColors(true)
+	stripeRows(tw.QAbstractItemView)
 	tw.SetWordWrap(false)
 	tw.VerticalHeader().SetVisible(false)
 	tw.VerticalHeader().SetDefaultSectionSize(tw.FontMetrics().Height() + 6)

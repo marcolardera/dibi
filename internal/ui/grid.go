@@ -122,11 +122,20 @@ type resultView struct {
 	exportNote  string
 }
 
+// stripeRows turns on alternating row colors with a stripe dark enough to
+// be seen: the AlternateBase of light palettes is barely off-white.
+func stripeRows(w *qt.QAbstractItemView) {
+	w.SetAlternatingRowColors(true)
+	pal := qt.NewQPalette7(w.Palette())
+	pal.SetColor2(qt.QPalette__AlternateBase, qt.NewQColor6("#eef1f5"))
+	w.SetPalette(pal)
+}
+
 func newResultView(app *App) *resultView {
 	v := &resultView{app: app, model: newResultModel(), table: qt.NewQTableView2()}
 	t := v.table
 	t.SetModel(v.model.QAbstractItemModel)
-	t.SetAlternatingRowColors(true)
+	stripeRows(t.QAbstractItemView)
 	t.SetWordWrap(false)
 	t.SetHorizontalScrollMode(qt.QAbstractItemView__ScrollPerPixel)
 	t.SetEditTriggers(qt.QAbstractItemView__NoEditTriggers)
