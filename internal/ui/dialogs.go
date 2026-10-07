@@ -256,11 +256,11 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 		return c
 	}
 	showStatus := func(ok bool, msg string) {
-		color := "#1b7f3b"
-		if !ok {
-			color = "#b00020"
+		if ok {
+			setTextColor(status, th.okText)
+		} else {
+			setTextColor(status, th.errText)
 		}
-		status.SetStyleSheet("color: " + color + ";")
 		status.SetText(msg)
 	}
 

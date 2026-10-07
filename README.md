@@ -34,6 +34,7 @@ See [spec.md](spec.md) for the full specification.
 - Copy cells with `Ctrl+C` (full values, tab-separated).
 - Export to CSV or XLSX (re-runs the query and streams all rows).
 - Saved queries.
+- Light and dark themes (toolbar button, remembered).
 - TLS for server connections (SSL modes from *disable* to *verify-full*,
   CA and client certificates, Oracle wallets).
 
@@ -55,7 +56,7 @@ Stored in the user config directory (`~/.config/dibi` on Linux):
 - `connections/` — one YAML file per connection. **Passwords are stored in
   plaintext** in this version.
 - `queries/` — saved queries, one `.sql` file each.
-- `state.yaml` — the last used connection.
+- `state.yaml` — the last used connection and the theme.
 
 ## Development
 

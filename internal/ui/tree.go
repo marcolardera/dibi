@@ -46,7 +46,8 @@ func newObjectTree(app *App) *objectTree {
 	clear.SetContext(qt.WidgetShortcut)
 	clear.OnActivated(t.filter.Clear)
 	t.noMatch = qt.NewQLabel3("No loaded object matches.")
-	t.noMatch.SetStyleSheet("color: #888888;")
+	setTextColor(t.noMatch, th.muted)
+	onThemeChange(t.noMatch.QWidget, func() { setTextColor(t.noMatch, th.muted) })
 	t.noMatch.SetContentsMargins(4, 0, 0, 0)
 	t.noMatch.Hide()
 	layout := qt.NewQVBoxLayout(t.panel)
@@ -70,7 +71,36 @@ func newObjectTree(app *App) *objectTree {
 	copyAct.SetShortcutContext(qt.WidgetShortcut)
 	copyAct.OnTriggered(func() { t.copyName(w.CurrentItem()) })
 	w.AddAction(copyAct)
+	onThemeChange(w.QWidget, func() { retone(w.InvisibleRootItem()) })
 	return t
+}
+
+// Tones of the placeholder items ("Loading…", errors), stored in toneRole
+// so that they can be recolored when the theme changes.
+const (
+	toneRole  = int(qt.UserRole) + 1
+	toneMuted = "muted"
+	toneError = "error"
+)
+
+func setTone(item *qt.QTreeWidgetItem, tone string) {
+	item.SetData(0, toneRole, qt.NewQVariant14(tone))
+	c := th.muted
+	if tone == toneError {
+		c = th.errText
+	}
+	item.SetForeground(0, qt.NewQBrush3(color(c)))
+}
+
+// retone recolors the placeholder items below item for the current theme.
+func retone(item *qt.QTreeWidgetItem) {
+	for i := 0; i < item.ChildCount(); i++ {
+		child := item.Child(i)
+		if tone := child.Data(0, toneRole); tone.IsValid() {
+			setTone(child, tone.ToString())
+		}
+		retone(child)
+	}
 }
 
 // copyName copies the qualified, query-ready name of a table or view.
@@ -243,7 +273,7 @@ func (t *objectTree) expand(item *qt.QTreeWidgetItem) {
 	t.app.setLastUsed(e.conn, e.node.Database)
 	e.loading = true
 	loading := qt.NewQTreeWidgetItem7(item, []string{"Loading…"})
-	loading.SetForeground(0, qt.NewQBrush3(qt.NewQColor6("#888888")))
+	setTone(loading, toneMuted)
 	node := e.node
 	type result struct {
 		nodes []db.Node
@@ -264,7 +294,7 @@ func (t *objectTree) expand(item *qt.QTreeWidgetItem) {
 			// Nodes come with an error when only some children failed to
 			// load (unreadable files of a folder): show both.
 			errItem := qt.NewQTreeWidgetItem7(item, []string{"Error: " + firstLine(r.err.Error(), 80)})
-			errItem.SetForeground(0, qt.NewQBrush3(qt.NewQColor6("#b00020")))
+			setTone(errItem, toneError)
 			errItem.SetToolTip(0, r.err.Error())
 			t.app.setStatus(fmt.Sprintf("Cannot load %s: %v", node.Name, r.err))
 			if len(r.nodes) == 0 {
@@ -274,7 +304,7 @@ func (t *objectTree) expand(item *qt.QTreeWidgetItem) {
 		e.loaded = true
 		if len(r.nodes) == 0 {
 			empty := qt.NewQTreeWidgetItem7(item, []string{"(empty)"})
-			empty.SetForeground(0, qt.NewQBrush3(qt.NewQColor6("#888888")))
+			setTone(empty, toneMuted)
 			return
 		}
 		for _, n := range r.nodes {

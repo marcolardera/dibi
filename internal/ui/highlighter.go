@@ -25,9 +25,28 @@ var sqlKeywords = []string{
 	"throw", "top", "tran", "try", "waitfor",
 }
 
+// highlightRule formats the matches of re (format points into the
+// highlighter's formats, which change with the theme).
 type highlightRule struct {
 	re     *qt.QRegularExpression
-	format *qt.QTextCharFormat
+	format **qt.QTextCharFormat
+}
+
+// highlightFormats are the text formats of a theme.
+type highlightFormats struct {
+	keyword, number, quoted, str, comment *qt.QTextCharFormat
+	match                                 *qt.QBrush
+}
+
+func newHighlightFormats(t *theme) highlightFormats {
+	return highlightFormats{
+		keyword: charFormat(t.keyword, true, false),
+		number:  charFormat(t.number, false, false),
+		quoted:  charFormat(t.quoted, false, false),
+		str:     charFormat(t.str, false, false),
+		comment: charFormat(t.comment, false, true),
+		match:   qt.NewQBrush3(color(t.match)),
+	}
 }
 
 func charFormat(color string, bold, italic bool) *qt.QTextCharFormat {
@@ -45,6 +64,7 @@ type sqlHighlighter struct {
 	*qt.QSyntaxHighlighter
 	search    string // text to mark, "" for none
 	matchCase bool
+	formats   highlightFormats
 }
 
 // setSearch changes the text marked as a search match.
@@ -56,30 +76,34 @@ func (h *sqlHighlighter) setSearch(text string, matchCase bool) {
 	h.Rehighlight()
 }
 
-// newSQLHighlighter highlights keywords, numbers, strings and comments.
+// newSQLHighlighter highlights keywords, numbers, strings and comments in
+// the editor, following the theme.
 // Rules are applied in order, so later ones (strings, comments) win over
 // keywords found inside them.
-func newSQLHighlighter(doc *qt.QTextDocument) *sqlHighlighter {
-	h := &sqlHighlighter{QSyntaxHighlighter: qt.NewQSyntaxHighlighter2(doc)}
-	matchBg := qt.NewQBrush3(qt.NewQColor6("#ffe58a"))
+func newSQLHighlighter(edit *qt.QPlainTextEdit) *sqlHighlighter {
+	h := &sqlHighlighter{QSyntaxHighlighter: qt.NewQSyntaxHighlighter2(edit.Document()), formats: newHighlightFormats(th)}
+	onThemeChange(edit.QWidget, func() {
+		h.formats = newHighlightFormats(th)
+		h.Rehighlight()
+	})
 	ci := qt.QRegularExpression__CaseInsensitiveOption
 	rules := []highlightRule{
-		{qt.NewQRegularExpression4(`\b(`+strings.Join(sqlKeywords, "|")+`)\b`, ci), charFormat("#0033b3", true, false)},
-		{qt.NewQRegularExpression2(`\b\d+(\.\d+)?([eE][+-]?\d+)?\b`), charFormat("#1750eb", false, false)},
-		{qt.NewQRegularExpression2(`"([^"]|"")*"`), charFormat("#871094", false, false)},
-		{qt.NewQRegularExpression2(`'([^'\\]|''|\\.)*'`), charFormat("#067d17", false, false)},
-		{qt.NewQRegularExpression2(`--[^\n]*`), charFormat("#8c8c8c", false, true)},
+		{qt.NewQRegularExpression4(`\b(`+strings.Join(sqlKeywords, "|")+`)\b`, ci), &h.formats.keyword},
+		{qt.NewQRegularExpression2(`\b\d+(\.\d+)?([eE][+-]?\d+)?\b`), &h.formats.number},
+		{qt.NewQRegularExpression2(`"([^"]|"")*"`), &h.formats.quoted},
+		{qt.NewQRegularExpression2(`'([^'\\]|''|\\.)*'`), &h.formats.str},
+		{qt.NewQRegularExpression2(`--[^\n]*`), &h.formats.comment},
 	}
-	comment := charFormat("#8c8c8c", false, true)
 	open := qt.NewQRegularExpression2(`/\*`)
 	closeRe := qt.NewQRegularExpression2(`\*/`)
 
 	h.OnHighlightBlock(func(text string) {
+		comment := h.formats.comment
 		for _, r := range rules {
 			it := r.re.GlobalMatch(text)
 			for it.HasNext() {
 				m := it.Next()
-				h.SetFormat(int(m.CapturedStart()), int(m.CapturedLength()), r.format)
+				h.SetFormat(int(m.CapturedStart()), int(m.CapturedLength()), *r.format)
 			}
 		}
 		// Multi-line /* */ comments; block state 1 means "inside a comment".
@@ -106,7 +130,7 @@ func newSQLHighlighter(doc *qt.QTextDocument) *sqlHighlighter {
 		for _, m := range findAll(text, h.search, h.matchCase) {
 			for i := m[0]; i < m[1]; i++ {
 				f := h.Format(i)
-				f.SetBackground(matchBg)
+				f.SetBackground(h.formats.match)
 				h.SetFormat(i, 1, &f)
 			}
 		}

@@ -283,7 +283,7 @@ func (t *sqlTab) execute(ctx context.Context, src *db.Source, database, text str
 	sess, err := t.ensureSession(ctx, src, database)
 	if err != nil {
 		failed = err
-		onUIWait(func() { t.messages.AppendHtml(errorHTML("Cannot connect: ", err.Error())) })
+		onUIWait(func() { appendError(t.messages, "Cannot connect: ", err.Error()) })
 		return
 	}
 
@@ -305,7 +305,7 @@ func (t *sqlTab) execute(ctx context.Context, src *db.Source, database, text str
 				errMsg = "cancelled (" + errMsg + ")"
 			}
 			onUIWait(func() {
-				t.messages.AppendHtml(errorHTML(label+"Error: ", errMsg))
+				appendError(t.messages, label+"Error: ", errMsg)
 				t.messages.AppendPlainText("    " + firstLine(stmt.Text, 120))
 				t.results.SetCurrentWidget(t.messages.QWidget)
 				t.showErrorPosition(failed, text, base, stmt)

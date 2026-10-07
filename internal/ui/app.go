@@ -35,8 +35,10 @@ type App struct {
 	exportBtn *qt.QPushButton
 
 	runAct, stopAct, saveAct *qt.QAction
+	themeAct                 *qt.QAction
 
 	lastConn, lastDB string
+	theme            string
 	scripts          int
 }
 
@@ -45,12 +47,13 @@ func Run(store *config.Store) int {
 	qt.NewQApplication(os.Args)
 	qt.QCoreApplication_SetApplicationName("Dibi")
 	qt.QGuiApplication_SetDesktopFileName("dibi")
-	forceLightTheme()
 
 	a := &App{store: store, sources: map[string]*db.Source{},
 		sqlTabs: map[uintptr]*sqlTab{}, infoTabs: map[uintptr]*infoTab{}}
 	st := store.LoadState()
 	a.lastConn, a.lastDB = st.LastConnection, st.LastDatabase
+	a.theme = themeByName(st.Theme).name
+	applyTheme(themeByName(a.theme))
 	a.build()
 	a.loadConnections()
 	if len(a.conns) == 0 {
@@ -66,16 +69,6 @@ func Run(store *config.Store) int {
 // autopilot, when set (only in builds with the "autopilot" tag), drives the
 // UI for automated end-to-end checks.
 var autopilot func(*App)
-
-// forceLightTheme switches to Fusion's light palette when the desktop
-// theme is dark (Dibi v1 only has a light theme).
-func forceLightTheme() {
-	pal := qt.QGuiApplication_Palette()
-	if pal.ColorWithCr(qt.QPalette__Window).Lightness() < 128 {
-		qt.QApplication_SetStyleWithStyle("Fusion")
-		qt.QApplication_SetPalette(qt.QApplication_Style().StandardPalette())
-	}
-}
 
 func (a *App) build() {
 	a.win = qt.NewQMainWindow2()
@@ -169,6 +162,40 @@ func (a *App) buildToolbar() {
 			a.closeTab(i)
 		}
 	})
+
+	// The theme switch, at the right end.
+	spacer := qt.NewQWidget2()
+	spacer.SetSizePolicy2(qt.QSizePolicy__Expanding, qt.QSizePolicy__Preferred)
+	tb.AddWidget(spacer)
+	a.themeAct = add(themeIcon(false), "", "", "", func() {
+		if a.theme == themeDark {
+			a.setTheme(themeLight)
+		} else {
+			a.setTheme(themeDark)
+		}
+	})
+	a.updateThemeAction()
+}
+
+// setTheme switches the application theme and remembers it.
+func (a *App) setTheme(name string) {
+	a.theme = name
+	applyTheme(themeByName(name))
+	a.updateThemeAction()
+	a.saveState()
+}
+
+// updateThemeAction makes the theme switch offer the other theme.
+func (a *App) updateThemeAction() {
+	dark := a.theme == themeDark
+	a.themeAct.SetIcon(themeIcon(dark))
+	if dark {
+		a.themeAct.SetText("Light\nTheme")
+		a.themeAct.SetToolTip("Switch to the light theme")
+	} else {
+		a.themeAct.SetText("Dark\nTheme")
+		a.themeAct.SetToolTip("Switch to the dark theme")
+	}
 }
 
 func (a *App) buildStatusBar() {
@@ -342,7 +369,11 @@ func (a *App) setLastUsed(conn, database string) {
 	if database != "" {
 		a.lastDB = database
 	}
-	a.store.SaveState(config.State{LastConnection: a.lastConn, LastDatabase: a.lastDB})
+	a.saveState()
+}
+
+func (a *App) saveState() {
+	a.store.SaveState(config.State{LastConnection: a.lastConn, LastDatabase: a.lastDB, Theme: a.theme})
 }
 
 // ---------------------------------------------------------------- tabs

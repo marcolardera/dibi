@@ -237,7 +237,7 @@ The `dibi` folder contains two subfolders:
 - `connections/`: **one YAML file per connection**
 - `queries/`: one `.sql` file per saved query
 
-Small application state (such as the last used connection) is stored in `dibi/state.yaml`.
+Small application state (such as the last used connection and the theme) is stored in `dibi/state.yaml`.
 
 ## Supported versions
 
@@ -248,7 +248,8 @@ Small application state (such as the last used connection) is stored in `dibi/st
 
 ## Look and feel
 
-- Light theme only in v1.
+- A light theme (the default) and a dark one, switched with the **Dark Theme** / **Light Theme** button at the right end of the toolbar. The switch applies at once and is remembered. The theme does not follow the desktop's.
+- In the dark theme every text color, syntax highlighting included, has a contrast of at least 4.5:1 with its background (WCAG AA); its syntax colors are the dark counterparts of the light ones (IntelliJ's schemes).
 
 In v1, passwords are stored in **plaintext** in the connection YAML file. Moving them to the OS keychain is planned for a later version.
 
@@ -264,7 +265,7 @@ In v1, passwords are stored in **plaintext** in the connection YAML file. Moving
 - **SQL Server connections.** `host\instance` names a named instance (the port is then found through the SQL Server Browser). An empty user means integrated authentication.
 - **TLS.** Server connections have an SSL mode named after libpq's `sslmode`: *disable*, *prefer* (TLS if the server offers it, otherwise plaintext), *require* (always TLS, certificate not checked, so a self-signed one is accepted), *verify-ca* (the certificate must be signed by a trusted CA) and *verify-full* (it must also name the host). The default is *prefer*, except for Oracle, which has no *prefer* because TLS (TCPS) is served by a separate listener; there the default is *disable*. The verify modes trust the system CAs, or a CA certificate file (PEM) if one is set. A client certificate and key (PEM) can be given for mutual TLS, except on SQL Server. Oracle also accepts a wallet folder (such as the one downloaded for an Autonomous Database): its `cwallet.sso` supplies the trusted CAs and the client certificate. On SQL Server, *prefer* leaves `encrypt` off (only the login is encrypted, unless the server forces encryption).
 - **File connections** refuse to open a missing file (a mistyped path does not create an empty database).
-- **Theme.** If the desktop theme is dark, Dibi switches to Qt's light Fusion palette.
+- **Theme.** Dibi always uses Qt's Fusion style, which draws everything from the palette and looks the same on Linux, Windows and macOS (the native Windows and macOS styles ignore custom palettes). The light palette is Fusion's own, the dark one is defined by Dibi; the colors Dibi paints itself (syntax, gutter, NULLs, errors) are part of each theme and are updated in place when the theme changes. The window title bar is drawn by the OS and is not themed.
 
 ## Out of scope for v1
 
@@ -275,5 +276,4 @@ In v1, passwords are stored in **plaintext** in the connection YAML file. Moving
 - Generated DDL view
 - OS keychain for credentials
 - Advanced transaction handling (manual commit/rollback)
-- Dark theme
 - Opening `.sql` files from outside `dibi/queries/`

@@ -5,7 +5,6 @@
 package ui
 
 import (
-	"html"
 	"strings"
 	"unicode/utf16"
 	"unsafe"
@@ -61,10 +60,49 @@ func utf16Len(s string) int {
 	return n
 }
 
-// errorHTML formats an error message for a QPlainTextEdit.
-func errorHTML(prefix, msg string) string {
-	return `<span style="color:#b00020;">` + html.EscapeString(prefix) +
-		strings.ReplaceAll(html.EscapeString(msg), "\n", "<br>") + `</span>`
+// errorProperty marks the text written by appendError.
+const errorProperty = int(qt.QTextFormat__UserProperty) + 1
+
+// appendError appends an error message to a text box, in the error color
+// of the theme.
+func appendError(edit *qt.QPlainTextEdit, prefix, msg string) {
+	doc := edit.Document()
+	start := 0
+	if !doc.IsEmpty() {
+		start = doc.CharacterCount() // after the new block separator
+	}
+	edit.AppendPlainText(prefix + msg)
+	cur := qt.NewQTextCursor2(doc)
+	cur.SetPosition(start)
+	cur.MovePosition2(qt.QTextCursor__End, qt.QTextCursor__KeepAnchor)
+	f := qt.NewQTextCharFormat()
+	f.SetForeground(qt.NewQBrush3(color(th.errText)))
+	f.SetProperty(errorProperty, qt.NewQVariant8(true))
+	cur.MergeCharFormat(f)
+	if !edit.Property("dibiErrors").IsValid() {
+		edit.SetProperty("dibiErrors", qt.NewQVariant8(true))
+		onThemeChange(edit.QWidget, func() { recolorErrors(doc) })
+	}
+}
+
+// recolorErrors gives the errors of a document the color of the theme.
+func recolorErrors(doc *qt.QTextDocument) {
+	var ranges [][2]int // collected first: formatting changes the fragments
+	for b := doc.FirstBlock(); b.IsValid(); b = b.Next() {
+		for it := b.Begin(); !it.AtEnd(); it.OperatorPlusPlus() {
+			if frag := it.Fragment(); frag.CharFormat().HasProperty(errorProperty) {
+				ranges = append(ranges, [2]int{frag.Position(), frag.Position() + frag.Length()})
+			}
+		}
+	}
+	f := qt.NewQTextCharFormat()
+	f.SetForeground(qt.NewQBrush3(color(th.errText)))
+	cur := qt.NewQTextCursor2(doc)
+	for _, r := range ranges {
+		cur.SetPosition(r[0])
+		cur.SetPosition2(r[1], qt.QTextCursor__KeepAnchor)
+		cur.MergeCharFormat(f)
+	}
 }
 
 // firstLine returns the first line of s, shortened to max runes.

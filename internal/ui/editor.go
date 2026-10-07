@@ -24,7 +24,7 @@ func newCodeEditor() *codeEditor {
 	e.SetFont(monoFont())
 	e.SetLineWrapMode(qt.QPlainTextEdit__NoWrap)
 	e.SetTabStopDistance(float64(4 * e.FontMetrics().HorizontalAdvance(" ")))
-	e.highlighter = newSQLHighlighter(e.Document())
+	e.highlighter = newSQLHighlighter(e.QPlainTextEdit)
 
 	e.gutter = qt.NewQWidget(e.QWidget)
 	e.gutter.OnPaintEvent(func(_ func(*qt.QPaintEvent), ev *qt.QPaintEvent) { e.paintGutter(ev) })
@@ -260,11 +260,11 @@ func (e *codeEditor) paintGutter(ev *qt.QPaintEvent) {
 	p := qt.NewQPainter2(e.gutter.QPaintDevice)
 	defer p.End()
 	area := ev.Rect()
-	p.FillRect5(area.Left(), area.Top(), area.Width(), area.Height(), qt.NewQColor6("#f3f3f3"))
+	p.FillRect5(area.Left(), area.Top(), area.Width(), area.Height(), color(th.gutter))
 	p.SetFont(e.Font())
 	width, lineHeight := e.gutter.Width()-6, e.FontMetrics().Height()
 	current := e.TextCursor().BlockNumber()
-	normal, emphasis := qt.NewQColor6("#9a9a9a"), qt.NewQColor6("#303030")
+	normal, emphasis := color(th.lineNumber), color(th.currentLine)
 
 	block := e.FirstVisibleBlock()
 	offset := e.ContentOffset()
@@ -307,6 +307,7 @@ type findBar struct {
 
 func newFindBar(e *codeEditor) *findBar {
 	b := &findBar{e: e, frame: qt.NewQFrame(e.QWidget)}
+	onThemeChange(b.frame.QWidget, b.showCount)
 	b.frame.SetFrameShape(qt.QFrame__StyledPanel)
 	b.frame.SetAutoFillBackground(true)
 	b.frame.SetCursor(qt.NewQCursor2(qt.ArrowCursor))
@@ -463,14 +464,14 @@ func (b *findBar) update(jump bool) {
 }
 
 func (b *findBar) showCount() {
-	b.count.SetStyleSheet("")
+	setTextColor(b.count, "")
 	switch {
 	case b.replaced > 0:
 		b.count.SetText(fmt.Sprintf("%d replaced", b.replaced))
 	case b.findEdit.Text() == "":
 		b.count.SetText("")
 	case len(b.matches) == 0:
-		b.count.SetStyleSheet("color: #b00020;")
+		setTextColor(b.count, th.errText)
 		b.count.SetText("No results")
 	default:
 		if i := b.current(); i >= 0 {

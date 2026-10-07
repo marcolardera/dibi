@@ -27,7 +27,6 @@ type resultModel struct {
 
 func newResultModel() *resultModel {
 	m := &resultModel{QAbstractTableModel: qt.NewQAbstractTableModel()}
-	gray := qt.NewQColor6("#9a9a9a")
 	right := int(qt.AlignRight | qt.AlignVCenter)
 
 	m.OnRowCount(func(parent *qt.QModelIndex) int {
@@ -55,7 +54,7 @@ func newResultModel() *resultModel {
 			return qt.NewQVariant14(text)
 		case qt.ForegroundRole:
 			if v == nil {
-				return gray.ToQVariant()
+				return color(th.muted).ToQVariant()
 			}
 		case qt.TextAlignmentRole:
 			if col.Numeric() {
@@ -122,20 +121,11 @@ type resultView struct {
 	exportNote  string
 }
 
-// stripeRows turns on alternating row colors with a stripe dark enough to
-// be seen: the AlternateBase of light palettes is barely off-white.
-func stripeRows(w *qt.QAbstractItemView) {
-	w.SetAlternatingRowColors(true)
-	pal := qt.NewQPalette7(w.Palette())
-	pal.SetColor2(qt.QPalette__AlternateBase, qt.NewQColor6("#eef1f5"))
-	w.SetPalette(pal)
-}
-
 func newResultView(app *App) *resultView {
 	v := &resultView{app: app, model: newResultModel(), table: qt.NewQTableView2()}
 	t := v.table
 	t.SetModel(v.model.QAbstractItemModel)
-	stripeRows(t.QAbstractItemView)
+	t.SetAlternatingRowColors(true)
 	t.SetWordWrap(false)
 	t.SetHorizontalScrollMode(qt.QAbstractItemView__ScrollPerPixel)
 	t.SetEditTriggers(qt.QAbstractItemView__NoEditTriggers)

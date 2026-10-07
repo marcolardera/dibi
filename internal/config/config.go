@@ -392,6 +392,7 @@ func (s *Store) DeleteQuery(name string) error {
 type State struct {
 	LastConnection string `yaml:"last_connection,omitempty"`
 	LastDatabase   string `yaml:"last_database,omitempty"`
+	Theme          string `yaml:"theme,omitempty"` // "light" (default) or "dark"
 }
 
 // LoadState reads the state file; a missing file yields an empty State.

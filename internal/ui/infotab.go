@@ -126,7 +126,7 @@ func (t *infoTab) load() {
 			t.title.SetText(db.KindLabel(t.node.Kind) + " " + t.node.Name)
 			msg := qt.NewQPlainTextEdit2()
 			msg.SetReadOnly(true)
-			msg.AppendHtml(errorHTML("Cannot load information: ", r.err.Error()))
+			appendError(msg, "Cannot load information: ", r.err.Error())
 			t.inner.AddTab(msg.QWidget, "Error")
 			t.app.setStatus("Cannot load " + t.node.Name + ".")
 			return
@@ -185,7 +185,7 @@ func (t *infoTab) build(info *db.Info) {
 		src.SetFont(monoFont())
 		src.SetLineWrapMode(qt.QPlainTextEdit__NoWrap)
 		src.SetTextInteractionFlags(qt.TextSelectableByMouse | qt.TextSelectableByKeyboard)
-		newSQLHighlighter(src.Document())
+		newSQLHighlighter(src)
 		t.inner.AddTab(src.QWidget, "Source")
 	}
 	if info.Preview != "" {
@@ -236,7 +236,7 @@ func (t *infoTab) loadPreview(query string) {
 			idx := t.inner.IndexOf(t.data.widget())
 			msg := qt.NewQPlainTextEdit2()
 			msg.SetReadOnly(true)
-			msg.AppendHtml(errorHTML("Cannot load the data preview: ", r.err.Error()))
+			appendError(msg, "Cannot load the data preview: ", r.err.Error())
 			t.inner.RemoveTab(idx)
 			t.inner.InsertTab(idx, msg.QWidget, previewTab)
 			t.data = nil
@@ -261,7 +261,7 @@ func stringTable(headers []string, rows [][]string) *qt.QTableWidget {
 	tw := qt.NewQTableWidget3(len(rows), len(headers))
 	tw.SetHorizontalHeaderLabels(headers)
 	tw.SetEditTriggers(qt.QAbstractItemView__NoEditTriggers)
-	stripeRows(tw.QAbstractItemView)
+	tw.SetAlternatingRowColors(true)
 	tw.SetWordWrap(false)
 	tw.VerticalHeader().SetVisible(false)
 	tw.VerticalHeader().SetDefaultSectionSize(tw.FontMetrics().Height() + 6)
