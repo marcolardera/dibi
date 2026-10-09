@@ -123,3 +123,148 @@ func TestToggleComments(t *testing.T) {
 		}
 	}
 }
+
+// cursorLine splits a line with a | marking the cursor into its UTF-16
+// units and the cursor's column.
+func cursorLine(s string) ([]uint16, int) {
+	before, after, _ := strings.Cut(s, "|")
+	return utf16.Encode([]rune(before + after)), len(utf16.Encode([]rune(before)))
+}
+
+func TestNewlineAt(t *testing.T) {
+	tests := []struct{ line, want string }{ // | marks the cursor
+		{"|", "\n|"},
+		{"select a|", "select a\n|"},
+		{"    and b = 1|", "    and b = 1\n    |"},
+		{"\tand b = 1|", "\tand b = 1\n\t|"},
+		{"select a, |b", "select a,\n|b"}, // blanks around the cursor are dropped
+		{"  select a  |  from t", "  select a\n  |from t"},
+		{"select count(|", "select count(\n    |"},
+		{"  insert into t (a, b) values (|", "  insert into t (a, b) values (\n      |"},
+		{"select count(|)", "select count(\n    |\n)"},
+		{"  where a in ( | )", "  where a in (\n      |\n  )"},
+		{"select f(a|)", "select f(a\n|)"},
+		{"    b|)", "    b\n|)"},
+		{"      b|)", "      b\n    |)"},
+		{"x = ')' |", "x = ')'\n|"},
+		{"x = '(' |", "x = '('\n|"}, // brackets in strings, identifiers and comments do not count
+		{"\"a(\" |", "\"a(\"\n|"},
+		{"a -- (|", "a -- (\n|"},
+		{"a /* ( */ b|", "a /* ( */ b\n|"},
+		{"f(x) |", "f(x)\n|"},
+		{"f(g(x) |", "f(g(x)\n    |"},
+		{"    |select 1", "\n    |select 1"}, // in the indentation the line moves down
+		{"  |  select 1", "\n  |  select 1"},
+		{"    |", "\n    |"},
+		{"😀 (|)", "😀 (\n    |\n)"}, // the emoji is 2 UTF-16 units
+	}
+	for _, tt := range tests {
+		line, col := cursorLine(tt.line)
+		ed := newlineAt(line, col)
+		before, after := line[:col-ed.removeBefore], line[col+ed.removeAfter:]
+		got := string(utf16.Decode(before)) + ed.before + "|" + ed.after + string(utf16.Decode(after))
+		if got != tt.want {
+			t.Errorf("newlineAt(%q) gives %q, want %q", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestOutdent(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"", ""},
+		{"  ", ""},
+		{"    ", ""},
+		{"      ", "    "}, // back to the previous tab stop
+		{"        ", "    "},
+		{"\t", ""},
+		{"\t\t", "\t"},
+		{"\t  ", "\t"},
+	}
+	for _, tt := range tests {
+		if got := outdent(tt.in); got != tt.want {
+			t.Errorf("outdent(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestShiftLines(t *testing.T) {
+	tests := []struct {
+		in   []string
+		out  bool
+		want []string
+	}{
+		{[]string{"select a", "", "  from t"}, false, []string{"    select a", "", "      from t"}},
+		{[]string{"\tselect 1"}, false, []string{"\t    select 1"}},
+		{[]string{"    select a", "  ", "      from t"}, true, []string{"select a", "  ", "    from t"}},
+		{[]string{"select a", "  from t", "\twhere"}, true, []string{"select a", "from t", "where"}},
+	}
+	for _, tt := range tests {
+		if got := shiftLines(tt.in, tt.out); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("shiftLines(%q, %v) = %q, want %q", tt.in, tt.out, got, tt.want)
+		}
+	}
+}
+
+func TestTabSpaces(t *testing.T) {
+	tests := []struct {
+		line string
+		want int
+	}{
+		{"|", 4},
+		{"ab|", 2},
+		{"abcd|", 4},
+		{"\t|", 4},
+		{"\ta|", 3},
+		{"a\t|b", 4},
+	}
+	for _, tt := range tests {
+		line, col := cursorLine(tt.line)
+		if got := tabSpaces(line, col); got != tt.want {
+			t.Errorf("tabSpaces(%q) = %d, want %d", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestIndentBackspace(t *testing.T) {
+	tests := []struct {
+		line string
+		want int
+	}{
+		{"|", 0},
+		{"    |", 4},
+		{"      |select", 2},
+		{"        |", 4},
+		{" |", 1},
+		{"\t|", 0}, // a tab is one character
+		{"  \t|", 0},
+		{"ab  |", 0}, // not in the indentation
+	}
+	for _, tt := range tests {
+		line, col := cursorLine(tt.line)
+		if got := indentBackspace(line, col); got != tt.want {
+			t.Errorf("indentBackspace(%q) = %d, want %d", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestCloserIndent(t *testing.T) {
+	tests := []struct {
+		line   string
+		ch     rune
+		want   string
+		wantOK bool
+	}{
+		{"        |", ')', "    ", true},
+		{"    |", ']', "", true},
+		{"\t\t|", '}', "\t", true},
+		{"|", ')', "", false},
+		{"    a|", ')', "", false},
+		{"    |", 'a', "", false},
+	}
+	for _, tt := range tests {
+		line, col := cursorLine(tt.line)
+		if got, ok := closerIndent(line, col, tt.ch); got != tt.want || ok != tt.wantOK {
+			t.Errorf("closerIndent(%q, %q) = %q, %v, want %q, %v", tt.line, tt.ch, got, ok, tt.want, tt.wantOK)
+		}
+	}
+}

@@ -62,6 +62,30 @@ func newCodeEditor() *codeEditor {
 // toggleComment comments the lines of the selection, or the current line,
 // with "--", or uncomments them if they all are, in one undoable edit.
 func (e *codeEditor) toggleComment() {
+	e.editLines(toggleComments, func(col int, before, after string) int {
+		// Keep the cursor on the same text, unless it was in the indentation.
+		indent := utf16Len(before[:len(before)-len(strings.TrimLeft(before, " \t"))])
+		if col > indent {
+			col = max(col+utf16Len(after)-utf16Len(before), indent)
+		}
+		return col
+	})
+}
+
+// shiftSelection indents the lines of the selection, or the current line,
+// by one level, or outdents them, in one undoable edit.
+func (e *codeEditor) shiftSelection(out bool) {
+	e.editLines(func(lines []string) []string { return shiftLines(lines, out) }, func(col int, before, after string) int {
+		return max(col+utf16Len(after)-utf16Len(before), 0) // the cursor moves with the text
+	})
+}
+
+// editLines replaces the lines of the selection, or the current line, with
+// transform(lines), in one undoable edit. A selection ending at the start
+// of a line leaves it out. A selection afterwards covers the edited lines;
+// otherwise cursorCol maps the cursor's UTF-16 column in the first line,
+// before, to its column in the edited one, after.
+func (e *codeEditor) editLines(transform func([]string) []string, cursorCol func(col int, before, after string) int) {
 	cur := e.TextCursor()
 	doc := e.Document()
 	first, last := doc.FindBlock(cur.SelectionStart()), doc.FindBlock(cur.SelectionEnd())
@@ -72,25 +96,19 @@ func (e *codeEditor) toggleComment() {
 	for b := first; b.IsValid() && b.BlockNumber() <= last.BlockNumber(); b = b.Next() {
 		lines = append(lines, b.Text())
 	}
-	toggled := toggleComments(lines)
-	if strings.Join(toggled, "\n") == strings.Join(lines, "\n") {
+	edited := transform(lines)
+	if strings.Join(edited, "\n") == strings.Join(lines, "\n") {
 		return
 	}
 	hadSelection, col := cur.HasSelection(), cur.PositionInBlock()
 	start := first.Position()
 	cur.SetPosition(start)
 	cur.SetPosition2(last.Position()+last.Length()-1, qt.QTextCursor__KeepAnchor)
-	cur.InsertText(strings.Join(toggled, "\n"))
+	cur.InsertText(strings.Join(edited, "\n"))
 	if hadSelection {
 		cur.SetPosition2(start, qt.QTextCursor__KeepAnchor)
 	} else {
-		// Keep the cursor on the same text, unless it was in the indentation.
-		before, after := utf16.Encode([]rune(lines[0])), utf16.Encode([]rune(toggled[0]))
-		indent := len(utf16.Encode([]rune(lines[0][:len(lines[0])-len(strings.TrimLeft(lines[0], " \t"))])))
-		if col > indent {
-			col = max(col+len(after)-len(before), indent)
-		}
-		cur.SetPosition(start + min(col, len(after)))
+		cur.SetPosition(start + min(cursorCol(col, lines[0], edited[0]), utf16Len(edited[0])))
 	}
 	e.SetTextCursor(cur)
 }
@@ -133,16 +151,46 @@ func toggleComments(lines []string) []string {
 // character also inserts its closing one, typing a closing character over
 // an equal one moves past it, Backspace between an empty pair deletes
 // both, and an opening character typed over a selection wraps it.
+// It also indents: Enter keeps the indentation (see newlineAt), a closing
+// bracket typed in the indentation outdents, Tab inserts spaces or indents
+// the selected lines, Shift+Tab outdents them, and Backspace in the
+// indentation deletes back to the previous tab stop.
 // Ctrl+K toggles comments; it is handled here because the text edit
 // claims it (delete to end of line) before any shortcut sees it.
 func (e *codeEditor) keyPress(super func(*qt.QKeyEvent), ev *qt.QKeyEvent) {
-	if qt.Key(ev.Key()) == qt.Key_K && ev.Modifiers() == qt.ControlModifier {
+	key := qt.Key(ev.Key())
+	if key == qt.Key_K && ev.Modifiers() == qt.ControlModifier {
 		e.toggleComment()
 		return
 	}
 	cur := e.TextCursor()
 	if ev.Modifiers()&^(qt.ShiftModifier|qt.KeypadModifier) != 0 {
 		super(ev)
+		return
+	}
+	switch key {
+	case qt.Key_Return, qt.Key_Enter: // Shift+Enter too, which would insert a line separator
+		e.newline(cur)
+		return
+	case qt.Key_Tab:
+		if ev.Modifiers()&qt.ShiftModifier != 0 { // usually Backtab
+			e.shiftSelection(true)
+			return
+		}
+		doc := e.Document()
+		if doc.FindBlock(cur.SelectionStart()).BlockNumber() != doc.FindBlock(cur.SelectionEnd()).BlockNumber() {
+			e.shiftSelection(false)
+			return
+		}
+		cur.BeginEditBlock()
+		cur.RemoveSelectedText()
+		line, col := utf16.Encode([]rune(cur.Block().Text())), cur.PositionInBlock()
+		cur.InsertText(strings.Repeat(" ", tabSpaces(line, col)))
+		cur.EndEditBlock()
+		e.SetTextCursor(cur)
+		return
+	case qt.Key_Backtab:
+		e.shiftSelection(true)
 		return
 	}
 	if cur.HasSelection() {
@@ -154,10 +202,15 @@ func (e *codeEditor) keyPress(super func(*qt.QKeyEvent), ev *qt.QKeyEvent) {
 		return
 	}
 	line, col := utf16.Encode([]rune(cur.Block().Text())), cur.PositionInBlock()
-	if qt.Key(ev.Key()) == qt.Key_Backspace {
+	if key == qt.Key_Backspace {
 		if emptyPair(line, col) {
 			cur.MovePosition(qt.QTextCursor__PreviousCharacter)
 			cur.MovePosition3(qt.QTextCursor__NextCharacter, qt.QTextCursor__KeepAnchor, 2)
+			cur.RemoveSelectedText()
+			return
+		}
+		if n := indentBackspace(line, col); n > 0 {
+			cur.MovePosition3(qt.QTextCursor__PreviousCharacter, qt.QTextCursor__KeepAnchor, n)
 			cur.RemoveSelectedText()
 			return
 		}
@@ -178,8 +231,29 @@ func (e *codeEditor) keyPress(super func(*qt.QKeyEvent), ev *qt.QKeyEvent) {
 		cur.MovePosition(qt.QTextCursor__PreviousCharacter)
 		e.SetTextCursor(cur)
 	default:
+		if indent, ok := closerIndent(line, col, text[0]); ok {
+			cur.MovePosition2(qt.QTextCursor__StartOfBlock, qt.QTextCursor__KeepAnchor)
+			cur.InsertText(indent + string(text[0]))
+			e.SetTextCursor(cur)
+			return
+		}
 		super(ev)
 	}
+}
+
+// newline replaces the selection, if any, with a line break indented as
+// newlineAt decides, in one undoable edit.
+func (e *codeEditor) newline(cur *qt.QTextCursor) {
+	cur.BeginEditBlock()
+	cur.RemoveSelectedText()
+	ed := newlineAt(utf16.Encode([]rune(cur.Block().Text())), cur.PositionInBlock())
+	start := cur.Position() - ed.removeBefore
+	cur.SetPosition(cur.Position() + ed.removeAfter)
+	cur.SetPosition2(start, qt.QTextCursor__KeepAnchor)
+	cur.InsertText(ed.before + ed.after)
+	cur.EndEditBlock()
+	cur.SetPosition(start + utf16Len(ed.before))
+	e.SetTextCursor(cur)
 }
 
 // wrapSelection puts the selection between open and its closing
@@ -242,6 +316,154 @@ func emptyPair(line []uint16, col int) bool {
 	}
 	closing, ok := closers[rune(line[col-1])]
 	return ok && closing == rune(line[col])
+}
+
+// indentUnit is one level of indentation.
+const indentUnit = "    "
+
+// newlineEdit is what Enter does: the removeBefore and removeAfter UTF-16
+// units around the cursor are replaced with before+after, and the cursor
+// goes between the two.
+type newlineEdit struct {
+	removeBefore, removeAfter int
+	before, after             string
+}
+
+// newlineAt decides what Enter does at UTF-16 column col of line. The new
+// line keeps the indentation of the current one, one level deeper after a
+// bracket left open and one level shallower when it starts with a closing
+// bracket. Between an opening bracket and its closing one, the closing one
+// goes on a line of its own below the indented cursor. Blanks around the
+// cursor are dropped, so no line ends with them, except in the
+// indentation: there Enter moves the line down as it is, leaving an empty
+// line.
+func newlineAt(line []uint16, col int) newlineEdit {
+	head, tail := string(utf16.Decode(line[:col])), string(utf16.Decode(line[col:]))
+	if strings.TrimLeft(head, " \t") == "" {
+		return newlineEdit{removeBefore: col, before: "\n" + head}
+	}
+	// Blanks are ASCII, so their bytes are UTF-16 units too.
+	trimmedHead, trimmedTail := strings.TrimRight(head, " \t"), strings.TrimLeft(tail, " \t")
+	ed := newlineEdit{removeBefore: len(head) - len(trimmedHead), removeAfter: len(tail) - len(trimmedTail)}
+	indent := head[:len(head)-len(strings.TrimLeft(head, " \t"))]
+	open := unclosedBracket(trimmedHead)
+	closing := trimmedTail != "" && strings.ContainsRune(")]}", rune(trimmedTail[0]))
+	switch {
+	case open && closing && closers[rune(trimmedHead[len(trimmedHead)-1])] == rune(trimmedTail[0]):
+		ed.before, ed.after = "\n"+indent+indentUnit, "\n"+indent
+	case open && !closing:
+		ed.before = "\n" + indent + indentUnit
+	case closing && !open:
+		ed.before = "\n" + outdent(indent)
+	default:
+		ed.before = "\n" + indent
+	}
+	return ed
+}
+
+// unclosedBracket reports whether s has an opening bracket that it does
+// not close, ignoring the brackets in strings, quoted identifiers and
+// comments.
+func unclosedBracket(s string) bool {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth = max(depth-1, 0)
+		case '\'', '"', '`':
+			end := strings.IndexByte(s[i+1:], c)
+			if end < 0 {
+				return depth > 0
+			}
+			i += end + 1
+		case '-':
+			if strings.HasPrefix(s[i:], "--") {
+				return depth > 0
+			}
+		case '/':
+			if strings.HasPrefix(s[i:], "/*") {
+				end := strings.Index(s[i+2:], "*/")
+				if end < 0 {
+					return depth > 0
+				}
+				i += end + 3
+			}
+		}
+	}
+	return depth > 0
+}
+
+// outdent removes one level from the end of the indentation indent: a
+// tab, or the spaces back to the previous tab stop.
+func outdent(indent string) string {
+	if strings.HasSuffix(indent, "\t") {
+		return indent[:len(indent)-1]
+	}
+	spaces := len(indent) - len(strings.TrimRight(indent, " "))
+	n := spaces % len(indentUnit)
+	if n == 0 {
+		n = min(spaces, len(indentUnit))
+	}
+	return indent[:len(indent)-n]
+}
+
+// shiftLines indents lines by one level, or outdents them (see outdent).
+// Blank lines are left alone.
+func shiftLines(lines []string, out bool) []string {
+	res := make([]string, len(lines))
+	for i, l := range lines {
+		body := strings.TrimLeft(l, " \t")
+		indent := l[:len(l)-len(body)]
+		switch {
+		case body == "":
+			res[i] = l
+		case out:
+			res[i] = outdent(indent) + body
+		default:
+			res[i] = indent + indentUnit + body
+		}
+	}
+	return res
+}
+
+// tabSpaces returns how many spaces Tab inserts at UTF-16 column col of
+// line: as many as reach the next tab stop.
+func tabSpaces(line []uint16, col int) int {
+	width := 0
+	for _, c := range line[:col] {
+		if c == '\t' {
+			width += len(indentUnit) - width%len(indentUnit)
+		} else {
+			width++
+		}
+	}
+	return len(indentUnit) - width%len(indentUnit)
+}
+
+// indentBackspace returns how many spaces Backspace deletes at UTF-16
+// column col of line when only spaces precede it: back to the previous tab
+// stop. It returns 0 elsewhere, where Backspace deletes a character.
+func indentBackspace(line []uint16, col int) int {
+	if col == 0 || strings.Trim(string(utf16.Decode(line[:col])), " ") != "" {
+		return 0
+	}
+	if n := col % len(indentUnit); n > 0 {
+		return n
+	}
+	return len(indentUnit)
+}
+
+// closerIndent returns the indentation that goes before a closing bracket
+// ch typed at UTF-16 column col of line, if only blanks precede it: one
+// level less, which lines it up with the line of the opening bracket.
+func closerIndent(line []uint16, col int, ch rune) (string, bool) {
+	head := string(utf16.Decode(line[:col]))
+	if !strings.ContainsRune(")]}", ch) || head == "" || strings.TrimLeft(head, " \t") != "" {
+		return "", false
+	}
+	return outdent(head), true
 }
 
 // gutterWidth fits the largest line number, with at least 3 digits.
