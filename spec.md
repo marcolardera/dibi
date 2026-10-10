@@ -54,7 +54,7 @@ Qt is used under the LGPL v3. Since Dibi is open source (MIT), static linking is
 | OS      | Distribution                                                    |
 |---------|-----------------------------------------------------------------|
 | Linux   | Single binary linked against system Qt 6, and/or an AppImage    |
-| Windows | Single static `.exe`, built natively with MSYS2 UCRT64 (`qt6-static`) on a Windows CI runner |
+| Windows | Single static `.exe`, cross-compiled on Linux in Docker (`make windows`) with Fedora's UCRT MinGW toolchain and a static Qt built from source |
 | macOS   | `.app` bundle                                                   |
 
 ### Spike results (see `spikes/`)
@@ -75,8 +75,8 @@ Qt is used under the LGPL v3. Since Dibi is open source (MIT), static linking is
   - Value types: `DECIMAL`/`MONEY` are `[]byte` text (precision preserved); integers are `int64`, `BIT` is `bool`, `FLOAT`/`REAL` are `float64`; dates and times are `time.Time` (`TIME` on 0001-01-01, `DATETIMEOFFSET` with its offset); `XML`, `TEXT`, `NTEXT` are strings; `SQL_VARIANT` is the underlying Go type. `UNIQUEIDENTIFIER` is 16 bytes in SQL Server's mixed-endian order (the first three groups must be byte-swapped; `mssql.UniqueIdentifier` does it). `GEOGRAPHY`/`HIERARCHYID`/`IMAGE` are raw bytes.
   - `UNIQUE` constraints allow only one `NULL`.
 - **Windows static cross-build** (miqt-docker `win64-cross-go1.26-qt6.5-static`): fails at link time. The prebuilt duckdb-go Windows library is built for the MinGW **UCRT** runtime with POSIX threads, while the miqt container's MinGW targets **MSVCRT** with Win32 threads (`undefined reference to __stdio_common_vswprintf`, `nanosleep`, …). Mixing the two runtimes is not safe.
-  - Chosen fix: build Windows releases natively in MSYS2 UCRT64 (`mingw-w64-ucrt-x86_64-qt6-static` 6.9, `mingw-w64-ucrt-x86_64-go`), where Qt, DuckDB and Go all use UCRT. To be validated on a Windows CI runner.
-  - Alternative: build DuckDB from source with the container's toolchain.
+  - Chosen fix (`build/windows`): cross-compile with Fedora's `ucrt64-gcc` (UCRT, POSIX threads, like DuckDB) and a static qtbase built from source with it, using the bundled zlib/libpng/freetype/harfbuzz/pcre2. A static Qt installs no pkg-config files, so the image writes them. The `.exe` links only system DLLs and runs under Wine, DuckDB included.
+  - Native alternative (`make windows-native`): MSYS2 UCRT64 with `mingw-w64-ucrt-x86_64-qt6-static`, whose Qt links MSYS2's static zlib/freetype/harfbuzz/… instead of bundled copies. Qt 6.12 needs miqt ≥ 0.15. Its `.prl` files have CRLF line endings. Checked by linking with MSYS2's libraries and CRT from Linux; not yet run on Windows.
 
 ## High-level GUI idea
 

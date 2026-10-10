@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build run test test-servers autopilot clean
+.PHONY: build run test test-servers autopilot windows windows-native clean
 
 ## build: build the release binary into bin/dibi
 build:
@@ -23,6 +23,28 @@ test-servers:
 ## autopilot: build the UI end-to-end driver (never shipped)
 autopilot:
 	go build -tags autopilot -o bin/dibi-autopilot ./cmd/dibi
+
+## windows: cross-compile bin/dibi.exe (static) in Docker, see build/windows
+## (the first run builds Qt from source and takes about 20 minutes)
+WINDOWS_IMAGE := dibi-windows-build
+windows:
+	docker build -t $(WINDOWS_IMAGE) build/windows
+	mkdir -p bin/.windows-cache
+	docker run --rm -u $$(id -u):$$(id -g) -v $(CURDIR):/src -w /src \
+		-v $$(go env GOMODCACHE):/gomod -e GOMODCACHE=/gomod \
+		-e GOCACHE=/src/bin/.windows-cache -e HOME=/tmp \
+		$(WINDOWS_IMAGE) go build -trimpath -tags windowsqtstatic \
+		-ldflags "$(LDFLAGS) -H windowsgui" -o bin/dibi.exe ./cmd/dibi
+
+## windows-native: build bin/dibi.exe (static) on Windows, from the MSYS2
+## UCRT64 shell (see the README for the packages to install)
+QT_STATIC ?= /ucrt64/qt6-static
+windows-native:
+	sh build/windows/qt-pkgconfig.sh "$$(cygpath -m $(QT_STATIC))" bin/.qt-pkgconfig
+	PKG_CONFIG_LIBDIR="$$(cygpath -m $(CURDIR)/bin/.qt-pkgconfig)" \
+		CGO_ENABLED=1 CGO_LDFLAGS_ALLOW='.*' \
+		go build -trimpath -tags windowsqtstatic \
+		-ldflags "$(LDFLAGS) -H windowsgui" -o bin/dibi.exe ./cmd/dibi
 
 clean:
 	rm -rf bin

@@ -50,6 +50,34 @@ make build        # produces bin/dibi
 
 The first build compiles the Qt bindings and takes a few minutes.
 
+## Building (Windows)
+
+`dibi.exe` is a single static executable (Qt, DuckDB and the C/C++ runtime
+linked in) that only needs Windows 10 or later. It can be built in two ways.
+
+**Cross-compiled on Linux**, in Docker:
+
+```sh
+make windows      # produces bin/dibi.exe
+```
+
+The first run builds the Docker image, which compiles Qt from source and
+takes about 20 minutes; see [build/windows/Dockerfile](build/windows/Dockerfile)
+for why.
+
+**On Windows**, with [MSYS2](https://www.msys2.org/). In the *UCRT64* shell:
+
+```sh
+pacman -S make git mingw-w64-ucrt-x86_64-{go,gcc,pkgconf,qt6-static} \
+  mingw-w64-ucrt-x86_64-{zlib,libpng,freetype,harfbuzz,pcre2,openssl,libb2,brotli,bzip2,glib2,gettext-runtime,libiconv,graphite2}
+make windows-native   # produces bin/dibi.exe
+```
+
+The second line installs the static libraries that MSYS2's Qt links against.
+`QT_STATIC` points to another static Qt (default `/ucrt64/qt6-static`).
+Use the UCRT64 toolchain, not MINGW64: DuckDB's prebuilt library needs the
+UCRT runtime.
+
 ## Configuration
 
 Stored in the user config directory (`~/.config/dibi` on Linux):
