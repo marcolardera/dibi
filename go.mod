@@ -6,7 +6,7 @@ require (
 	github.com/duckdb/duckdb-go/v2 v2.10505.0
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/mappu/miqt v0.14.0
+	github.com/mappu/miqt v0.15.0
 	github.com/microsoft/go-mssqldb v1.11.2
 	github.com/sijms/go-ora/v2 v2.9.0
 	github.com/xuri/excelize/v2 v2.11.0
