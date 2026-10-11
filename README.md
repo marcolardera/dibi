@@ -6,38 +6,32 @@ alternative to DBeaver or DataGrip.
 
 Supported sources: **PostgreSQL**, **MySQL**, **MariaDB**, **Oracle** (no
 Instant Client needed), **SQL Server**, **SQLite**, **DuckDB**, and **CSV** /
-**Parquet** files or folders of them (queried through DuckDB, one view per
-file, so they can be joined).
+**Parquet** files or folders of them.
 
 See [spec.md](spec.md) for the full specification.
 
+![screenshot](screenshot.png)
+
 ## Features
 
-- Object tree per connection, loaded lazily: databases, schemas, tables,
-  views, materialized views, functions, procedures, packages, sequences,
-  and indexes/triggers under their table.
-  A filter box narrows it as you type.
-- Information panel: columns (type, nullability, key, default, comment),
-  constraints, indexes, source code of views/routines/triggers, and a
-  50-row data preview. Its **Refresh** button reloads it all; refreshing a
-  node in the tree also reloads the open panels of the objects under it.
-- `Ctrl+C` on a table or view in the tree copies its query-ready name
-  (e.g. `schema.table`, quoted where needed).
-- SQL editor with syntax highlighting, line numbers, find/replace
-  (`Ctrl+F`, `Ctrl+H`), auto-closed brackets and quotes, automatic
-  indentation (`Tab`/`Shift+Tab` indent and outdent the selected lines),
-  and comment toggling (`Ctrl+K`). **Run** (`Ctrl+Enter`) executes the
-  selection, or the whole script statement by statement; each result set
-  gets its own tab. Each editor tab has its own database session.
-- New scripts default to the connection (and database) you used last.
-- **Stop** cancels the running query on the server and keeps the session.
-- Results are streamed from the cursor, 1000 rows per page.
-- Copy cells with `Ctrl+C` (full values, tab-separated).
-- Export to CSV or XLSX (re-runs the query and streams all rows).
-- Saved queries.
-- Light and dark themes (toolbar button, remembered).
-- TLS for server connections (SSL modes from *disable* to *verify-full*,
-  CA and client certificates, Oracle wallets).
+- **Database explorer.** Browse databases, schemas, tables, views,
+  routines, sequences, indexes and triggers in a lazily loaded tree with
+  instant filtering.
+- **Object inspector.** See an object's columns, constraints, indexes,
+  source code and a preview of its data at a glance.
+- **SQL editor.** Syntax highlighting, find and replace, automatic
+  indentation and the editing conveniences you expect. Run a selection or a
+  whole script; every statement's results get their own tab, and every
+  editor tab its own session.
+- **Fast results.** Rows are streamed and paged from the server, so large
+  queries stay responsive and can be cancelled at any time.
+- **Export.** Save results to CSV or Excel.
+- **Saved queries** for the scripts you run often.
+- **Secure connections.** TLS with certificate verification, client
+  certificates and Oracle wallets.
+- **Light and dark themes.**
+- **Native desktop app** for Linux and Windows, built with Qt. On Windows
+  it ships as a single executable with nothing else to install.
 
 ## Building (Linux)
 
