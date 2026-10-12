@@ -65,11 +65,18 @@ func newObjectTree(app *App) *objectTree {
 	w.OnItemClicked(func(item *qt.QTreeWidgetItem, _ int) { t.activate(item) })
 	w.OnCustomContextMenuRequested(t.contextMenu)
 
-	// Ctrl+C copies the reference of the selected table or view.
-	copyAct := qt.NewQAction5("Copy Name", w.QObject)
+	// Ctrl+C copies the reference of the selected table or view, or the
+	// selected error message.
+	copyAct := qt.NewQAction5("Copy", w.QObject)
 	copyAct.SetShortcut(qt.NewQKeySequence6(qt.QKeySequence__Copy))
 	copyAct.SetShortcutContext(qt.WidgetShortcut)
-	copyAct.OnTriggered(func() { t.copyName(w.CurrentItem()) })
+	copyAct.OnTriggered(func() {
+		if item := w.CurrentItem(); errorText(item) != "" {
+			t.copyError(item)
+		} else {
+			t.copyName(item)
+		}
+	})
 	w.AddAction(copyAct)
 	onThemeChange(w.QWidget, func() { retone(w.InvisibleRootItem()) })
 	return t
@@ -100,6 +107,22 @@ func retone(item *qt.QTreeWidgetItem) {
 			setTone(child, tone.ToString())
 		}
 		retone(child)
+	}
+}
+
+// errorText returns the full message of an error item, or "".
+func errorText(item *qt.QTreeWidgetItem) string {
+	if item == nil || item.Data(0, toneRole).ToString() != toneError {
+		return ""
+	}
+	return item.ToolTip(0) // the item itself shows only the first line
+}
+
+// copyError copies the full message of an error item.
+func (t *objectTree) copyError(item *qt.QTreeWidgetItem) {
+	if msg := errorText(item); msg != "" {
+		qt.QGuiApplication_Clipboard().SetText(msg)
+		t.app.setStatus("Copied the error message.")
 	}
 }
 
@@ -354,7 +377,16 @@ func (t *objectTree) contextMenu(pos *qt.QPoint) {
 	e := t.entry(item)
 	if e == nil {
 		menu := qt.NewQMenu(t.widget.QWidget)
-		menu.QWidget.AddActionWithText("New Connection…").OnTriggered(t.app.newConnection)
+		switch {
+		case item == nil: // empty space
+			menu.QWidget.AddActionWithText("New Connection…").OnTriggered(t.app.newConnection)
+		case errorText(item) != "":
+			copyAct := menu.QWidget.AddActionWithText("Copy Error Message")
+			copyAct.SetShortcut(qt.NewQKeySequence6(qt.QKeySequence__Copy)) // shown as a hint
+			copyAct.OnTriggered(func() { t.copyError(item) })
+		default: // "Loading…" and "(empty)" have no actions
+			return
+		}
 		menu.ExecWithPos(t.widget.Viewport().MapToGlobalWithQPoint(pos))
 		return
 	}
