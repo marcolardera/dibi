@@ -4,6 +4,14 @@
 
 A lightweight SQL database admin tool, similar to DBeaver or DataGrip but smaller, more efficient and less bloated.
 
+## Feature specs
+
+This document is the main specification and the index of the specs of single features, which live next to it in `specs/`:
+
+| Spec                                   | Feature                                                   |
+|----------------------------------------|-----------------------------------------------------------|
+| [table_import.md](table_import.md)     | Import a CSV or XLSX file into a new table                |
+
 ## Requirements
 
 The tool is developed in **Go** and compiled into a single binary. It must be portable to the 3 main operating systems (Linux, Windows and macOS). The GUI must feel native.

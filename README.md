@@ -8,7 +8,8 @@ Supported sources: **PostgreSQL**, **MySQL**, **MariaDB**, **Oracle** (no
 Instant Client needed), **SQL Server**, **SQLite**, **DuckDB**, and **CSV** /
 **Parquet** files or folders of them.
 
-See [spec.md](spec.md) for the full specification.
+See [specs/spec.md](specs/spec.md) for the full specification, and the index
+of the feature specs.
 
 ![screenshot](screenshot.png)
 
