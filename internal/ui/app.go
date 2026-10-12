@@ -704,11 +704,12 @@ func (a *App) runExport(v *resultView, opts export.Options, done func(n int, err
 		})
 		return result{n, err}
 	}, func(r result) {
+		cancelled := ctx.Err() != nil
 		cancel()
 		progress.Hide()
 		progress.DeleteLater()
 		switch {
-		case r.err != nil && ctx.Err() != nil:
+		case r.err != nil && cancelled:
 			a.setStatus("Export cancelled.")
 		case r.err != nil:
 			a.setStatus("Export failed.")
