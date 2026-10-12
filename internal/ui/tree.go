@@ -403,6 +403,12 @@ func (t *objectTree) contextMenu(pos *qt.QPoint) {
 		copyAct.SetShortcut(qt.NewQKeySequence6(qt.QKeySequence__Copy)) // shown as a hint
 		copyAct.OnTriggered(func() { t.copyName(item) })
 	}
+	if src := t.app.source(conn); src != nil && src.CanImport(e.node) {
+		add("Import Table…", func() {
+			t.app.setLastUsed(conn, e.node.Database)
+			t.app.importTable(conn, e.node, func() { t.refreshTables(item, e) })
+		})
+	}
 	if e.node.HasChildren() {
 		add("Refresh", func() { t.refresh(item) })
 	} else if e.node.HasInfo() {
@@ -429,4 +435,26 @@ func (t *objectTree) collapseConnection(name string) {
 		e.loaded = false
 	}
 	item.SetExpanded(false)
+}
+
+// refreshTables reloads the tables group of a schema (or database) item,
+// or the group item itself, if it is still there and was loaded, so that
+// an imported table shows.
+func (t *objectTree) refreshTables(item *qt.QTreeWidgetItem, e *treeEntry) {
+	if t.entry(item) != e || !e.loaded {
+		return
+	}
+	if e.node.Kind == db.KindGroup {
+		t.refresh(item)
+		return
+	}
+	for i := 0; i < item.ChildCount(); i++ {
+		child := item.Child(i)
+		if ce := t.entry(child); ce != nil && ce.node.Kind == db.KindGroup && ce.node.Group == db.KindTable {
+			if ce.loaded {
+				t.refresh(child)
+			}
+			return
+		}
+	}
 }

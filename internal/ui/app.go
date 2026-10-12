@@ -2,14 +2,17 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"dibi/internal/config"
 	"dibi/internal/db"
 	"dibi/internal/export"
+	"dibi/internal/importer"
 
 	qt "github.com/mappu/miqt/qt6"
 )
@@ -721,4 +724,86 @@ func (a *App) runExport(v *resultView, opts export.Options, done func(n int, err
 			done(r.n, r.err)
 		}
 	})
+}
+
+// importTable asks for a file and imports it into a new table of the
+// schema (or database) node, or of its Tables group, in the background with a cancellable
+// progress dialog. done, if set, is called after a successful import.
+func (a *App) importTable(conn string, node db.Node, done func()) {
+	src := a.source(conn)
+	if src == nil {
+		return
+	}
+	opts, ok := importDialog(a.win.QWidget, src.ImportTarget(node))
+	if !ok {
+		return
+	}
+	a.runImport(src, node, opts, done)
+}
+
+// runImport runs an import. Success is reported in the status bar, errors
+// in a Messages tab.
+func (a *App) runImport(src *db.Source, node db.Node, opts importer.Options, done func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	progress := qt.NewQProgressDialog5("Reading the file…", "Cancel", 0, 0, a.win.QWidget)
+	progress.SetWindowTitle("Import")
+	progress.SetWindowModality(qt.WindowModal)
+	progress.SetMinimumDuration(300)
+	progress.SetAutoClose(false)
+	progress.SetAutoReset(false)
+	progress.OnCanceled(cancel)
+	start := time.Now()
+	type result struct {
+		res importer.Result
+		err error
+	}
+	async(func() result {
+		res, err := importer.Run(ctx, src, node, opts, func(phase string, n int64) {
+			onUI(func() { progress.SetLabelText(fmt.Sprintf("%s… %d rows", phase, n)) })
+		})
+		return result{res, err}
+	}, func(r result) {
+		cancelled := ctx.Err() != nil
+		cancel()
+		progress.Hide()
+		progress.DeleteLater()
+		switch {
+		case r.err != nil && cancelled:
+			a.setStatus("Import cancelled; nothing was imported.")
+		case r.err != nil:
+			a.setStatus("Import failed; nothing was imported.")
+			a.showImportErrors(src.Conn.Name, opts, r.err)
+		default:
+			a.setStatus(fmt.Sprintf("Imported %d rows from %s into %s in %.1f s.",
+				r.res.Rows, filepath.Base(opts.Path), r.res.Table, time.Since(start).Seconds()))
+			if done != nil {
+				done()
+			}
+		}
+	})
+}
+
+// showImportErrors opens a Messages tab listing the errors of an import.
+func (a *App) showImportErrors(conn string, opts importer.Options, err error) {
+	msgs := qt.NewQPlainTextEdit2()
+	msgs.SetReadOnly(true)
+	msgs.SetFont(monoFont())
+	msgs.AppendPlainText(fmt.Sprintf("Import of %s into the table %s (%s) failed. Nothing was imported.\n",
+		opts.Path, strings.TrimSpace(opts.Table), conn))
+	var fe *importer.FileErrors
+	if errors.As(err, &fe) {
+		msgs.AppendPlainText(fmt.Sprintf("Problems found in the file (%d%s):", len(fe.List), map[bool]string{true: " or more"}[fe.Truncated]))
+		for _, e := range fe.List {
+			appendError(msgs, "  ", e)
+		}
+		if fe.Truncated {
+			msgs.AppendPlainText("  … (only the first problems are listed)")
+		}
+	} else {
+		appendError(msgs, "Error: ", err.Error())
+	}
+	msgs.MoveCursor(qt.QTextCursor__Start)
+	idx := a.tabs.AddTab2(msgs.QWidget, icon("dialog-error", qt.QStyle__SP_MessageBoxCritical), "Messages")
+	a.tabs.SetTabToolTip(idx, "Import of "+filepath.Base(opts.Path)+" · "+conn)
+	a.tabs.SetCurrentIndex(idx)
 }

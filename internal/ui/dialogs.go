@@ -13,6 +13,7 @@ import (
 	"dibi/internal/config"
 	"dibi/internal/db"
 	"dibi/internal/export"
+	"dibi/internal/importer"
 
 	qt "github.com/mappu/miqt/qt6"
 )
@@ -487,6 +488,143 @@ func exportDialog(parent *qt.QWidget, note string) (export.Options, bool) {
 			opts.SheetName = strings.TrimSpace(sheet.Text())
 		} else {
 			opts.Format = export.CSV
+			opts.Separator = seps[max(sepCombo.CurrentIndex(), 0)].r
+			opts.NullText = nullText.Text()
+		}
+		ok = true
+		dlg.Accept()
+	})
+	buttons.OnRejected(dlg.Reject)
+	update()
+	dlg.Exec()
+	return opts, ok
+}
+
+// importDialog asks for the options of a table import into target (the
+// name of a schema or database). It returns false if cancelled.
+func importDialog(parent *qt.QWidget, target string) (importer.Options, bool) {
+	dlg := qt.NewQDialog(parent)
+	dlg.SetWindowTitle("Import Table")
+	dlg.SetMinimumWidth(480)
+	layout := qt.NewQVBoxLayout(dlg.QWidget)
+
+	noteLabel := qt.NewQLabel3(fmt.Sprintf("Creates a table in %s and loads the file into it. "+
+		"Column types are inferred from the data.", target))
+	noteLabel.SetWordWrap(true)
+	layout.AddWidget(noteLabel.QWidget)
+
+	form := qt.NewQFormLayout2()
+	layout.AddLayout(form.QLayout)
+	csvRadio := qt.NewQRadioButton3("CSV")
+	xlsxRadio := qt.NewQRadioButton3("Excel (XLSX)")
+	csvRadio.SetChecked(true)
+	formatRow := qt.NewQWidget2()
+	fl := hbox(csvRadio.QWidget, xlsxRadio.QWidget)
+	fl.AddStretch()
+	formatRow.SetLayout(fl.QLayout)
+	form.AddRow3("Format:", formatRow)
+
+	path := qt.NewQLineEdit2()
+	browse := qt.NewQPushButton3("Browse…")
+	pathRow := qt.NewQWidget2()
+	pathRow.SetLayout(hbox(path.QWidget, browse.QWidget).QLayout)
+	form.AddRow3("File:", pathRow)
+
+	header := qt.NewQCheckBox3("The first row holds the column names")
+	header.SetChecked(true)
+	form.AddRow3("", header.QWidget)
+
+	sepCombo := qt.NewQComboBox2()
+	seps := []struct {
+		label string
+		r     rune
+	}{{"Comma ( , )", ','}, {"Semicolon ( ; )", ';'}, {"Tab", '\t'}, {"Pipe ( | )", '|'}}
+	for _, s := range seps {
+		sepCombo.AddItem(s.label)
+	}
+	nullText := qt.NewQLineEdit2()
+	nullText.SetPlaceholderText("empty")
+	nullText.SetToolTip("Values equal to this text are imported as NULL.\n" +
+		"Empty values are NULL in columns that are not text.")
+	sepLabel, nullLabel := qt.NewQLabel3("Separator:"), qt.NewQLabel3("NULL as:")
+	form.AddRow(sepLabel.QWidget, sepCombo.QWidget)
+	form.AddRow(nullLabel.QWidget, nullText.QWidget)
+
+	sheet := qt.NewQLineEdit2()
+	sheet.SetPlaceholderText("first sheet")
+	sheetLabel := qt.NewQLabel3("Sheet name:")
+	form.AddRow(sheetLabel.QWidget, sheet.QWidget)
+
+	table := qt.NewQLineEdit2()
+	table.SetPlaceholderText("name of the new table")
+	form.AddRow3("Destination table:", table.QWidget)
+	// The table is named after the file, until the user names it.
+	tableEdited := false
+	table.OnTextEdited(func(string) { tableEdited = true })
+
+	isXLSX := func() bool { return xlsxRadio.IsChecked() }
+	update := func() {
+		for _, w := range []*qt.QWidget{sepLabel.QWidget, sepCombo.QWidget, nullLabel.QWidget, nullText.QWidget} {
+			w.SetVisible(!isXLSX())
+		}
+		sheetLabel.SetVisible(isXLSX())
+		sheet.SetVisible(isXLSX())
+	}
+	csvRadio.OnToggled(func(bool) { update() })
+	path.OnTextChanged(func(p string) {
+		switch strings.ToLower(filepath.Ext(strings.TrimSpace(p))) {
+		case ".csv", ".tsv", ".txt":
+			csvRadio.SetChecked(true)
+		case ".xlsx", ".xlsm":
+			xlsxRadio.SetChecked(true)
+		}
+		if strings.EqualFold(filepath.Ext(p), ".tsv") {
+			sepCombo.SetCurrentIndex(2)
+		}
+		if !tableEdited && strings.TrimSpace(p) != "" {
+			table.SetText(db.FileTableName(strings.TrimSpace(p)))
+		}
+	})
+	browse.OnClicked(func() {
+		dir := filepath.Dir(path.Text())
+		if path.Text() == "" {
+			dir, _ = os.UserHomeDir()
+		}
+		filter := "CSV files (*.csv *.tsv *.txt);;Excel files (*.xlsx *.xlsm);;All files (*)"
+		if isXLSX() {
+			filter = "Excel files (*.xlsx *.xlsm);;CSV files (*.csv *.tsv *.txt);;All files (*)"
+		}
+		if f := qt.QFileDialog_GetOpenFileName4(dlg.QWidget, "Import From", dir, filter); f != "" {
+			path.SetText(f)
+		}
+	})
+
+	buttons := qt.NewQDialogButtonBox4(qt.QDialogButtonBox__Ok | qt.QDialogButtonBox__Cancel)
+	buttons.Button(qt.QDialogButtonBox__Ok).SetText("Import")
+	layout.AddWidget(buttons.QWidget)
+	var opts importer.Options
+	ok := false
+	buttons.OnAccepted(func() {
+		p := strings.TrimSpace(path.Text())
+		if p == "" {
+			qt.QMessageBox_Warning(dlg.QWidget, "Import", "Choose a file to import.")
+			return
+		}
+		if fi, err := os.Stat(p); err != nil || fi.IsDir() {
+			qt.QMessageBox_Warning(dlg.QWidget, "Import", fmt.Sprintf("%s is not a readable file.", p))
+			return
+		}
+		name := strings.TrimSpace(table.Text())
+		if name == "" {
+			qt.QMessageBox_Warning(dlg.QWidget, "Import", "Enter the name of the table to create.")
+			return
+		}
+		opts = importer.Options{Path: p, Header: header.IsChecked(), Table: name}
+		if isXLSX() {
+			opts.Format = importer.XLSX
+			opts.SheetName = strings.TrimSpace(sheet.Text())
+		} else {
+			opts.Format = importer.CSV
 			opts.Separator = seps[max(sepCombo.CurrentIndex(), 0)].r
 			opts.NullText = nullText.Text()
 		}

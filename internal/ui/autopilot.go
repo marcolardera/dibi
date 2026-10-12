@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"dibi/internal/export"
+	"dibi/internal/importer"
 
 	qt "github.com/mappu/miqt/qt6"
 )
@@ -574,6 +575,74 @@ func runAutopilot(a *App) {
 		})
 	}()
 	onUIWait(a.export)
+
+	p.importTable()
+}
+
+// importTable imports CSV files into PostgreSQL through the import runner,
+// checking the status bar, the tree and the Messages tab.
+func (p *pilot) importTable() {
+	a := p.a
+	p.log("== Import")
+	onUIWait(func() { a.setLastUsed("pg", "dibi") })
+	p.runScript("DROP TABLE IF EXISTS public.imported_people")
+	schema := p.item("pg", "dibi", "public")
+	if schema == nil || p.item("pg", "dibi", "public", "Tables") == nil {
+		return
+	}
+	entry := ui(func() *treeEntry { return a.tree.entry(schema) })
+	src := a.source("pg")
+	good := filepath.Join(p.dir, "people.csv")
+	bad := filepath.Join(p.dir, "bad.csv")
+	os.WriteFile(good, []byte("id;name;amount;born\n1;Ada;1.50;1815-12-10\n2;Linus;NULL;1969-12-28\n"), 0o644)
+	os.WriteFile(bad, []byte("id,name\n1,Ada\n2\n3,Bob,extra\n"), 0o644)
+	opts := importer.Options{Format: importer.CSV, Path: good, Header: true, Separator: ';', NullText: "NULL", Table: "imported_people"}
+
+	go func() {
+		time.Sleep(800 * time.Millisecond)
+		p.shot("20-import-dialog")
+		onUIWait(func() {
+			if w := qt.QApplication_ActiveModalWidget(); w != nil {
+				w.Close()
+			}
+		})
+	}()
+	onUIWait(func() { a.importTable("pg", entry.node, nil) })
+
+	onUIWait(func() { a.runImport(src, entry.node, opts, func() { a.tree.refreshTables(schema, entry) }) })
+	p.wait("import", func() bool { return strings.HasPrefix(a.statusMsg, "Imported") })
+	p.check(strings.HasPrefix(p.status(), "Imported 2 rows from people.csv into public.imported_people"), "status: %s", p.status())
+	p.check(p.item("pg", "dibi", "public", "Tables", "imported_people") != nil, "imported table in the tree")
+	st := p.runScript("SELECT name, amount, born FROM public.imported_people ORDER BY id")
+	p.check(strings.Contains(p.messages(st), "2 row(s) fetched"), "imported rows readable")
+	p.shot("21-imported")
+
+	tabs := ui(func() int { return a.tabs.Count() })
+	onUIWait(func() { a.runImport(src, entry.node, opts, nil) })
+	p.wait("messages tab", func() bool { return a.tabs.Count() == tabs+1 })
+	text := p.messagesTab()
+	p.check(strings.Contains(text, "already exists"), "existing table reported:\n%s", indent(text))
+
+	opts.Path, opts.Separator, opts.Table = bad, ',', "bad_people"
+	onUIWait(func() { a.runImport(src, entry.node, opts, nil) })
+	p.wait("messages tab", func() bool { return a.tabs.Count() == tabs+2 })
+	text = p.messagesTab()
+	p.check(strings.Contains(text, "line 3: 1 values instead of 2") && strings.Contains(text, "line 4: 3 values instead of 2"),
+		"file errors listed:\n%s", indent(text))
+	p.check(strings.HasPrefix(p.status(), "Import failed; nothing was imported"), "status: %s", p.status())
+	p.check(ui(func() string { return a.tabs.TabText(a.tabs.CurrentIndex()) }) == "Messages", "Messages tab is current")
+	p.shot("22-import-errors")
+}
+
+// messagesTab returns the text of the current tab if it is a Messages tab.
+func (p *pilot) messagesTab() string {
+	return ui(func() string {
+		a := p.a
+		if a.tabs.TabText(a.tabs.CurrentIndex()) != "Messages" {
+			return "(not a Messages tab; status: " + a.statusMsg + ")"
+		}
+		return qt.UnsafeNewQPlainTextEdit(a.tabs.CurrentWidget().UnsafePointer()).ToPlainText()
+	})
 }
 
 func indent(s string) string {

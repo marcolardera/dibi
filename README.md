@@ -26,6 +26,8 @@ See [spec.md](spec.md) for the full specification.
 - **Fast results.** Rows are streamed and paged from the server, so large
   queries stay responsive and can be cancelled at any time.
 - **Export.** Save results to CSV or Excel.
+- **Import.** Create a table from a CSV or Excel file, with column types
+  inferred from the data.
 - **Saved queries** for the scripts you run often.
 - **Secure connections.** TLS with certificate verification, client
   certificates and Oracle wallets.
