@@ -27,6 +27,7 @@ type App struct {
 	infoTabs map[uintptr]*infoTab
 
 	status    *qt.QLabel
+	statusMsg string // the full status message, which status may show elided
 	pageLabel *qt.QLabel
 	navFirst  *qt.QToolButton
 	navPrev   *qt.QToolButton
@@ -200,8 +201,16 @@ func (a *App) updateThemeAction() {
 
 func (a *App) buildStatusBar() {
 	sb := a.win.StatusBar()
-	a.status = qt.NewQLabel3("Ready.")
+	a.status = qt.NewQLabel2()
 	a.status.SetTextInteractionFlags(qt.TextSelectableByMouse)
+	// The label takes the width the bar gives it rather than the width of
+	// its text, and elides the message to fit.
+	a.status.SetSizePolicy2(qt.QSizePolicy__Ignored, qt.QSizePolicy__Preferred)
+	a.status.OnResizeEvent(func(super func(*qt.QResizeEvent), ev *qt.QResizeEvent) {
+		super(ev)
+		a.showStatus()
+	})
+	a.setStatus("Ready.")
 	sb.AddWidget2(a.status.QWidget, 1)
 
 	nav := func(ic *qt.QIcon, tip string, f func()) *qt.QToolButton {
@@ -227,7 +236,24 @@ func (a *App) buildStatusBar() {
 	sb.AddPermanentWidget(a.exportBtn.QWidget)
 }
 
-func (a *App) setStatus(msg string) { a.status.SetText(msg) }
+// setStatus shows a message on a single line of the status bar: line breaks
+// become spaces, and a message too long for the bar is elided, with the
+// whole message in the tooltip.
+func (a *App) setStatus(msg string) {
+	a.statusMsg = msg
+	a.showStatus()
+}
+
+func (a *App) showStatus() {
+	line := strings.Join(strings.Fields(a.statusMsg), " ")
+	shown := a.status.FontMetrics().ElidedText(line, qt.ElideRight, a.status.Width())
+	a.status.SetText(shown)
+	if shown != a.statusMsg {
+		a.status.SetToolTip(a.statusMsg)
+	} else {
+		a.status.SetToolTip("")
+	}
+}
 
 // ---------------------------------------------------------------- connections
 

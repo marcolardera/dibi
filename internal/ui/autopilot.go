@@ -66,7 +66,7 @@ func (p *pilot) shot(name string) {
 	})
 }
 
-func (p *pilot) status() string { return ui(func() string { return p.a.status.Text() }) }
+func (p *pilot) status() string { return ui(func() string { return p.a.statusMsg }) }
 func (p *pilot) page() string   { return ui(func() string { return p.a.pageLabel.Text() }) }
 
 // item finds a tree item by path, expanding each level.
