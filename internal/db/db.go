@@ -327,7 +327,11 @@ func (s *Source) Pool(database string) (*sql.DB, error) {
 		return nil, err
 	}
 	p.SetMaxIdleConns(2)
-	p.SetConnMaxIdleTime(5 * time.Minute)
+	if !s.Conn.InMemory() {
+		// An in-memory SQLite database is gone once its last connection
+		// is closed, so its idle connections are kept.
+		p.SetConnMaxIdleTime(5 * time.Minute)
+	}
 	s.pools[database] = p
 	return p, nil
 }

@@ -176,6 +176,11 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 		} else {
 			dbLabel.SetText("Database:")
 		}
+		if t == config.SQLite || t == config.DuckDB {
+			path.SetPlaceholderText(config.MemoryPath + " for an in-memory database")
+		} else {
+			path.SetPlaceholderText("")
+		}
 		if t == config.MSSQL {
 			host.SetPlaceholderText(`host or host\instance`)
 			user.SetPlaceholderText("empty for Windows authentication")
@@ -303,7 +308,7 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 	}
 	buttons.OnAccepted(func() {
 		c := collect()
-		if c.Type.IsFile() && c.Path != "" {
+		if c.Type.IsFile() && c.Path != "" && !c.InMemory() {
 			fi, err := os.Stat(c.Path)
 			switch {
 			case errors.Is(err, fs.ErrNotExist):

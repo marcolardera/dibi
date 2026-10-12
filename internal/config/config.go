@@ -68,6 +68,15 @@ func (t Type) IsFile() bool {
 	return false
 }
 
+// MemoryPath is the path that opens a new in-memory database instead of a file.
+const MemoryPath = ":memory:"
+
+// InMemory reports whether the connection opens a new in-memory database.
+// Only SQLite and DuckDB support it.
+func (c *Connection) InMemory() bool {
+	return (c.Type == SQLite || c.Type == DuckDB) && c.Path == MemoryPath
+}
+
 // DefaultPort returns the usual port of a server type, or 0 for file types.
 func (t Type) DefaultPort() int {
 	switch t {

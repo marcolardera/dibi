@@ -20,6 +20,11 @@ import (
 type duckdb struct{}
 
 func (duckdb) open(c config.Connection, _ string) (*sql.DB, error) {
+	if c.InMemory() {
+		// All connections of the pool share the database, which lives
+		// until the pool is closed.
+		return sql.Open("duckdb", "")
+	}
 	// Refuse to silently create a new empty database on a mistyped path.
 	if _, err := os.Stat(c.Path); err != nil {
 		return nil, err

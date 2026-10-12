@@ -710,6 +710,56 @@ func TestMissingFileIsNotCreated(t *testing.T) {
 	}
 }
 
+func TestInMemory(t *testing.T) {
+	ctx := context.Background()
+	for _, typ := range []config.Type{config.SQLite, config.DuckDB} {
+		t.Run(string(typ), func(t *testing.T) {
+			open := func() *Source {
+				src, err := NewSource(config.Connection{Name: "mem", Type: typ, Path: config.MemoryPath})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(src.Close)
+				return src
+			}
+			src := open()
+			s1, err := src.NewSession(ctx, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s1.Close()
+			if _, err := s1.ExecContext(ctx, "CREATE TABLE t (a INTEGER)"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s1.ExecContext(ctx, "INSERT INTO t VALUES (1), (2)"); err != nil {
+				t.Fatal(err)
+			}
+			// Every session of the source sees the same database.
+			s2, err := src.NewSession(ctx, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s2.Close()
+			var n int
+			if err := queryRowScan(ctx, s2, "SELECT count(*) FROM t", &n); err != nil || n != 2 {
+				t.Fatalf("count = %d, %v; want 2", n, err)
+			}
+			// Another source gets its own database.
+			s3, err := open().NewSession(ctx, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s3.Close()
+			if err := queryRowScan(ctx, s3, "SELECT count(*) FROM t", &n); err == nil {
+				t.Fatal("another source must not see the table")
+			}
+			if _, err := os.Stat(config.MemoryPath); err == nil {
+				t.Fatal("no file must be created")
+			}
+		})
+	}
+}
+
 func queryRowScan(ctx context.Context, sess *Session, q string, dest ...any) error {
 	rows, err := sess.QueryContext(ctx, q)
 	if err != nil {

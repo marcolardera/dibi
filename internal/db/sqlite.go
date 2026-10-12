@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"dibi/internal/config"
 	"dibi/internal/sqlsplit"
@@ -17,7 +18,17 @@ import (
 // sqlite: databases are "main" plus attached ones; there is no schema level.
 type sqlite struct{}
 
+// memoryDBs numbers the in-memory databases, so that each source gets its own.
+var memoryDBs atomic.Int64
+
 func (sqlite) open(c config.Connection, _ string) (*sql.DB, error) {
+	if c.InMemory() {
+		// ":memory:" would give each connection of the pool its own
+		// database; the memdb VFS shares one between the connections of the
+		// process that name it, until the last of them is closed.
+		dsn := fmt.Sprintf("file:/dibi-memory-%d?vfs=memdb&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)", memoryDBs.Add(1))
+		return sql.Open("sqlite", dsn)
+	}
 	// Refuse to silently create a new empty database on a mistyped path.
 	if _, err := os.Stat(c.Path); err != nil {
 		return nil, err
