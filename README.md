@@ -2,7 +2,7 @@
 
 A lightweight SQL database admin tool: explore database objects, inspect
 their metadata, run queries and export results. A smaller, faster
-alternative to DBeaver or DataGrip.
+alternative to DBeaver or DataGrip. Minimal by design.
 
 Supported sources: **PostgreSQL**, **MySQL**, **MariaDB**, **Oracle** (no
 Instant Client needed), **SQL Server**, **SQLite**, **DuckDB**, and **CSV** /
@@ -21,8 +21,9 @@ of the feature specs.
 - **Object inspector.** See an object's columns, constraints, indexes,
   source code and a preview of its data at a glance.
 - **SQL editor.** Syntax highlighting, find and replace, automatic
-  indentation and the editing conveniences you expect. Run a selection or a
-  whole script; every statement's results get their own tab, and every
+  indentation and auto-closed brackets and quotes. No annoying autocomplete popups,
+  by design: the editor never covers your code. Run a selection or a whole
+  script; every statement's results get their own tab, and every
   editor tab its own session.
 - **Fast results.** Rows are streamed and paged from the server, so large
   queries stay responsive and can be cancelled at any time.

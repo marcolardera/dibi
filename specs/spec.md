@@ -85,7 +85,7 @@ Qt is used under the LGPL v3. Since Dibi is open source (MIT), static linking is
   - `UNIQUE` constraints allow only one `NULL`.
 - **Windows static cross-build** (miqt-docker `win64-cross-go1.26-qt6.5-static`): fails at link time. The prebuilt duckdb-go Windows library is built for the MinGW **UCRT** runtime with POSIX threads, while the miqt container's MinGW targets **MSVCRT** with Win32 threads (`undefined reference to __stdio_common_vswprintf`, `nanosleep`, …). Mixing the two runtimes is not safe.
   - Chosen fix (`build/windows`): cross-compile with Fedora's `ucrt64-gcc` (UCRT, POSIX threads, like DuckDB) and a static qtbase built from source with it, using the bundled zlib/libpng/freetype/harfbuzz/pcre2. A static Qt installs no pkg-config files, so the image writes them. The `.exe` links only system DLLs and runs under Wine, DuckDB included.
-  - Native alternative (`make windows-native`): MSYS2 UCRT64 with `mingw-w64-ucrt-x86_64-qt6-static`, whose Qt links MSYS2's static zlib/freetype/harfbuzz/… instead of bundled copies. Qt 6.12 needs miqt ≥ 0.15. Its `.prl` files have CRLF line endings. Checked by linking with MSYS2's libraries and CRT from Linux; not yet run on Windows.
+  - Native alternative (`make windows-native`): MSYS2 UCRT64 with `mingw-w64-ucrt-x86_64-qt6-static`, whose Qt links MSYS2's static zlib/freetype/harfbuzz/… instead of bundled copies. Qt 6.12 needs miqt ≥ 0.15. Its `.prl` files have CRLF line endings. Checked by linking with MSYS2's libraries and CRT from Linux, and run on Windows.
 
 ## High-level GUI idea
 
@@ -165,6 +165,7 @@ The preview query uses the right syntax for each database type (e.g. `LIMIT 50`,
 - **Toggle comment** (`Ctrl+K`, or *Toggle Comment* in the right-click menu) comments the lines of the selection, or the current line, with `-- `, or uncomments them if every non-blank one already starts with `--`. When commenting, lines that already are comments get a second `--`, so toggling again gives back the original text. Comments go at the smallest indentation of the lines, so they stay aligned; blank lines are left alone, and a selection ending at the start of a line leaves that line out. One undoable step.
 - **Brackets and quotes close automatically**: typing `(`, `[`, `{`, `'` or `"` also inserts `)`, `]`, `}`, `'` or `"` after the cursor. The pair is inserted only before a blank, the end of the line, a closing bracket, `,` or `;`, so typing before a word adds no stray character; quotes are not paired right after a word or a quote (`N'…'`, `'it''s'`). Typing a closing character in front of the same one moves past it, and `Backspace` between an empty pair deletes both. Typing an opening character over a selection wraps it in the pair (in one undoable step) and keeps it selected.
 - **Automatic indentation**, with 4 spaces per level. `Enter` (and `Shift+Enter`) keeps the indentation of the current line, one level deeper after a bracket left open on it (brackets in strings, quoted identifiers and comments do not count) and one level shallower when the new line starts with a closing bracket; between an empty pair, as in `count(|)`, the closing bracket goes on a line of its own below the indented cursor. Blanks around the cursor are dropped, so lines do not end with them; `Enter` in the indentation moves the line down as it is. A closing bracket typed where only blanks precede it outdents by one level. `Tab` inserts spaces up to the next tab stop, or indents the lines of a selection spanning several lines; `Shift+Tab` outdents the lines of the selection, or the current line, back to the previous tab stop (blank lines are left alone, the selection is kept, one undoable step). `Backspace` in an indentation of spaces deletes back to the previous tab stop.
+- **No autocomplete, by design.** Completion popups cover the code being written and break the flow of typing, and generated table aliases are rarely the ones the user wants. The editor's help is limited to automatic indentation and closing brackets and quotes, which never hide text or insert anything the user did not start.
 - Each SQL editor tab has a **connection selector** (dropdown) at the top.
 - Each SQL editor tab opens its **own database session** (separate connection), so tabs never block each other and Stop only affects the current tab.
 - **Run** executes the current selection, if any; otherwise the whole content of the tab.
@@ -282,7 +283,6 @@ By default, passwords are stored in **plaintext** in the connection YAML file; e
 
 - Editing data in the grid
 - SSH tunnels (use `ssh -L` and connect to the local port)
-- Autocomplete (but we already have auto-indent and auto-closing of parenthesis)
 - ER diagrams
 - Generated DDL view
 - OS keychain for credentials (see [password_storage.md](password_storage.md) for why the vault is used instead)
