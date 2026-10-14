@@ -35,7 +35,7 @@ WINDOWS_RUN = docker run --rm -u $$(id -u):$$(id -g) -v $(CURDIR):/src -w /src \
 	-v $$(go env GOMODCACHE):/gomod -e GOMODCACHE=/gomod \
 	-e GOCACHE=/src/bin/.windows-cache -e HOME=/tmp $(WINDOWS_IMAGE)
 windows: windows-image
-	mkdir -p bin/.windows-cache
+	mkdir -p bin/.windows-cache "$$(go env GOMODCACHE)" # as the user, not as root by docker -v
 	$(WINDOWS_RUN) go build -trimpath -tags windowsqtstatic \
 		-ldflags "$(LDFLAGS) -H windowsgui" -o bin/dibi.exe ./cmd/dibi
 
@@ -47,7 +47,7 @@ windows-image:
 ## windows-notices: write the third-party notices of bin/dibi.exe into
 ## bin/THIRD_PARTY_NOTICES-windows.txt
 windows-notices: windows-image
-	mkdir -p bin/.windows-cache
+	mkdir -p bin/.windows-cache "$$(go env GOMODCACHE)" # as the user, not as root by docker -v
 	$(WINDOWS_RUN) build/notices.sh $(VERSION) bin/THIRD_PARTY_NOTICES-windows.txt
 
 ## windows-native: build bin/dibi.exe (static) on Windows, from the MSYS2
