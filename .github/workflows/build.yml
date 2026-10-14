@@ -1,0 +1,109 @@
+# Tests and builds dibi for Linux and Windows on every push and pull
+# request; the binaries are kept as workflow artifacts. Pushing a tag v*
+# also publishes them as a GitHub release (a pre-release if the tag has a
+# suffix, as in v0.2.0-rc1).
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    # The binary needs the glibc and Qt (6.4) of the system it is built on,
+    # or newer ones.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git describe needs the tags
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: sudo apt-get update && sudo apt-get install -y qt6-base-dev qt6-base-private-dev
+      - run: make test
+      - run: make build
+      - name: Package
+        run: |
+          V=$(git describe --tags --always --dirty)
+          D=dibi-$V-linux-amd64
+          mkdir "$D"
+          cp bin/dibi LICENSE "$D"/
+          build/notices.sh "$V" "$D"/THIRD_PARTY_NOTICES.txt
+          tar -czf "$D".tar.gz "$D" # tar keeps the executable bit
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dibi-*-linux-amd64.tar.gz
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Keep LF line endings (the shell scripts need them)
+        shell: pwsh
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: >-
+            make git zip
+            mingw-w64-ucrt-x86_64-go mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-qt6-static
+            mingw-w64-ucrt-x86_64-zlib mingw-w64-ucrt-x86_64-libpng
+            mingw-w64-ucrt-x86_64-freetype mingw-w64-ucrt-x86_64-harfbuzz
+            mingw-w64-ucrt-x86_64-pcre2 mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-libb2 mingw-w64-ucrt-x86_64-brotli
+            mingw-w64-ucrt-x86_64-bzip2 mingw-w64-ucrt-x86_64-glib2
+            mingw-w64-ucrt-x86_64-gettext-runtime mingw-w64-ucrt-x86_64-libiconv
+            mingw-w64-ucrt-x86_64-graphite2
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/go-build
+            ~/go/pkg/mod
+          key: windows-go-${{ hashFiles('go.sum') }}
+      # The checkout belongs to another user than MSYS2's git.
+      - run: git config --global --add safe.directory '*'
+      - run: make windows-native
+      - name: Package
+        run: |
+          V=$(git describe --tags --always --dirty)
+          D=dibi-$V-windows-amd64
+          mkdir "$D"
+          cp bin/dibi.exe LICENSE "$D"/
+          build/notices.sh "$V" "$D"/THIRD_PARTY_NOTICES.txt
+          zip -r "$D".zip "$D"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dibi-*-windows-amd64.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case $GITHUB_REF_NAME in *-*) PRE=--prerelease ;; *) PRE= ;; esac
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "Dibi $GITHUB_REF_NAME" --generate-notes $PRE \
+            linux/*.tar.gz windows/*.zip

@@ -110,6 +110,21 @@ the main workflows and saves screenshots (`DIBI_SHOTS=dir`); use it with a
 throwaway `XDG_CONFIG_HOME`. `DIBI_AUTOPILOT_ONLY=passwords` runs only the
 password storage checks, which need just a `pg` connection.
 
+### Releasing
+
+Every push builds Linux and Windows archives in GitHub Actions
+([.github/workflows/build.yml](.github/workflows/build.yml)), downloadable
+from the run's page. Pushing a tag publishes them as a GitHub release:
+
+```sh
+git tag -a v0.1.0 -m "First public beta"
+git push origin v0.1.0
+```
+
+The version (`dibi --version`) comes from `git describe`. Each archive has
+a `THIRD_PARTY_NOTICES.txt` written by `build/notices.sh`; after upgrading
+duckdb-go, run `build/duckdb-licenses.sh` to update the DuckDB licenses.
+
 ### Layout
 
 | Path | Contents |
