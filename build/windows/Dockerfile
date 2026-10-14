@@ -41,6 +41,13 @@ RUN curl -fsSL -o /tmp/qtbase.tar.xz \
 COPY qt-pkgconfig.sh /usr/local/bin/
 RUN qt-pkgconfig.sh /opt/qt6
 
+# Qt's license texts and the attributions of the code it bundles, for the
+# notices shipped with dibi.exe (build/notices.sh). A separate download, so
+# that adding them did not rebuild Qt.
+RUN mkdir /opt/qt6/licenses && \
+    curl -fsSL "https://download.qt.io/official_releases/qt/${QT_VERSION%.*}/${QT_VERSION}/submodules/qtbase-everywhere-src-${QT_VERSION}.tar.xz" | \
+    tar -xJ -C /opt/qt6/licenses --strip-components=1 --wildcards '*/LICENSES/*' '*/qt_attribution.json'
+
 ENV CC=x86_64-w64-mingw32ucrt-gcc \
     CXX=x86_64-w64-mingw32ucrt-g++ \
     PKG_CONFIG=pkg-config \

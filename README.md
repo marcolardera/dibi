@@ -53,7 +53,8 @@ The first build compiles the Qt bindings and takes a few minutes.
 `dibi.exe` is a single static executable (Qt, DuckDB and the C/C++ runtime
 linked in) that only needs Windows 10 or later. It can be built in two ways.
 
-**Cross-compiled on Linux**, in Docker:
+**In Docker** (the way releases are built), on Linux or, on Windows, in a
+WSL2 shell with Docker Desktop. It needs `make`, Go and Docker:
 
 ```sh
 make windows      # produces bin/dibi.exe
@@ -63,7 +64,7 @@ The first run builds the Docker image, which compiles Qt from source and
 takes about 20 minutes; see [build/windows/Dockerfile](build/windows/Dockerfile)
 for why.
 
-**On Windows**, with [MSYS2](https://www.msys2.org/). In the *UCRT64* shell:
+**Natively on Windows**, with [MSYS2](https://www.msys2.org/). In the *UCRT64* shell:
 
 ```sh
 pacman -S make git mingw-w64-ucrt-x86_64-{go,gcc,pkgconf,qt6-static} \
@@ -75,6 +76,14 @@ The second line installs the static libraries that MSYS2's Qt links against.
 `QT_STATIC` points to another static Qt (default `/ucrt64/qt6-static`).
 Use the UCRT64 toolchain, not MINGW64: DuckDB's prebuilt library needs the
 UCRT runtime.
+
+> **Currently broken.** MSYS2's GCC 16 uses native thread-local storage,
+> while the prebuilt DuckDB library (duckdb-go-bindings v0.10505.0) was
+> built for emulated TLS, so linking fails with `undefined reference to
+> __emutls_v._ZSt11__once_call`. Until duckdb-go-bindings ships a library
+> built with a current MSYS2, use Docker, or build DuckDB from source with
+> MSYS2's GCC and link it with `-tags duckdb_use_static_lib` (see the
+> duckdb-go README).
 
 ## Configuration
 
@@ -122,8 +131,9 @@ git push origin v0.1.0
 ```
 
 The version (`dibi --version`) comes from `git describe`. Each archive has
-a `THIRD_PARTY_NOTICES.txt` written by `build/notices.sh`; after upgrading
-duckdb-go, run `build/duckdb-licenses.sh` to update the DuckDB licenses.
+a `THIRD_PARTY_NOTICES.txt` written by `build/notices.sh` (`make notices`,
+`make windows-notices`); after upgrading duckdb-go, run
+`build/duckdb-licenses.sh` to update the DuckDB licenses.
 
 ### Layout
 

@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build run test test-servers autopilot windows windows-native clean
+.PHONY: build run test test-servers autopilot notices windows windows-image windows-notices windows-native clean
 
 ## build: build the release binary into bin/dibi
 build:
@@ -9,6 +9,11 @@ build:
 
 run: build
 	./bin/dibi
+
+## notices: write the third-party notices of bin/dibi into
+## bin/THIRD_PARTY_NOTICES.txt (shipped with the release)
+notices:
+	build/notices.sh $(VERSION) bin/THIRD_PARTY_NOTICES.txt
 
 ## test: unit tests plus SQLite/DuckDB/CSV/Parquet integration tests
 test:
@@ -25,16 +30,25 @@ autopilot:
 	go build -tags autopilot -o bin/dibi-autopilot ./cmd/dibi
 
 ## windows: cross-compile bin/dibi.exe (static) in Docker, see build/windows
-## (the first run builds Qt from source and takes about 20 minutes)
 WINDOWS_IMAGE := dibi-windows-build
-windows:
-	docker build -t $(WINDOWS_IMAGE) build/windows
+WINDOWS_RUN = docker run --rm -u $$(id -u):$$(id -g) -v $(CURDIR):/src -w /src \
+	-v $$(go env GOMODCACHE):/gomod -e GOMODCACHE=/gomod \
+	-e GOCACHE=/src/bin/.windows-cache -e HOME=/tmp $(WINDOWS_IMAGE)
+windows: windows-image
 	mkdir -p bin/.windows-cache
-	docker run --rm -u $$(id -u):$$(id -g) -v $(CURDIR):/src -w /src \
-		-v $$(go env GOMODCACHE):/gomod -e GOMODCACHE=/gomod \
-		-e GOCACHE=/src/bin/.windows-cache -e HOME=/tmp \
-		$(WINDOWS_IMAGE) go build -trimpath -tags windowsqtstatic \
+	$(WINDOWS_RUN) go build -trimpath -tags windowsqtstatic \
 		-ldflags "$(LDFLAGS) -H windowsgui" -o bin/dibi.exe ./cmd/dibi
+
+## windows-image: build the Docker image for the Windows builds (the first
+## run builds Qt from source and takes about 20 minutes)
+windows-image:
+	docker build -t $(WINDOWS_IMAGE) build/windows
+
+## windows-notices: write the third-party notices of bin/dibi.exe into
+## bin/THIRD_PARTY_NOTICES-windows.txt
+windows-notices: windows-image
+	mkdir -p bin/.windows-cache
+	$(WINDOWS_RUN) build/notices.sh $(VERSION) bin/THIRD_PARTY_NOTICES-windows.txt
 
 ## windows-native: build bin/dibi.exe (static) on Windows, from the MSYS2
 ## UCRT64 shell (see the README for the packages to install)
