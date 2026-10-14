@@ -22,6 +22,9 @@ type App struct {
 	store   *config.Store
 	conns   []config.Connection
 	sources map[string]*db.Source
+	// passwords holds the passwords asked this session, by connection, for
+	// the connections that never store them.
+	passwords map[string]string
 
 	win      *qt.QMainWindow
 	tree     *objectTree
@@ -52,7 +55,7 @@ func Run(store *config.Store) int {
 	qt.QCoreApplication_SetApplicationName("Dibi")
 	qt.QGuiApplication_SetDesktopFileName("dibi")
 
-	a := &App{store: store, sources: map[string]*db.Source{},
+	a := &App{store: store, sources: map[string]*db.Source{}, passwords: map[string]string{},
 		sqlTabs: map[uintptr]*sqlTab{}, infoTabs: map[uintptr]*infoTab{}}
 	st := store.LoadState()
 	a.lastConn, a.lastDB = st.LastConnection, st.LastDatabase
@@ -269,16 +272,18 @@ func (a *App) loadConnections() {
 	a.tree.reload()
 	for _, t := range a.sqlTabs {
 		t.reloadConnections(t.conn)
-		if a.source(t.conn) == nil {
+		if a.connection(t.conn) == nil {
 			t.setConnection("", "")
 		}
 	}
-	if a.source(a.lastConn) == nil {
+	if a.connection(a.lastConn) == nil {
 		a.lastConn, a.lastDB = "", ""
 	}
 }
 
-// source returns the data source of a connection (created on first use).
+// source returns the data source of a connection, created on first use. A
+// password not kept in the connection file is then asked or read from the
+// vault: source returns nil if the user cancels.
 func (a *App) source(name string) *db.Source {
 	if name == "" {
 		return nil
@@ -288,6 +293,9 @@ func (a *App) source(name string) *db.Source {
 	}
 	for _, c := range a.conns {
 		if c.Name == name {
+			if !a.resolvePassword(&c) {
+				return nil
+			}
 			s, err := db.NewSource(c)
 			if err != nil {
 				return nil
@@ -312,6 +320,7 @@ func (a *App) newConnection() {
 	if !ok {
 		return
 	}
+	a.rememberPassword(c, "")
 	a.loadConnections()
 	a.setLastUsed(c.Name, "")
 	a.setStatus(fmt.Sprintf("Connection %q created.", c.Name))
@@ -335,10 +344,22 @@ func (a *App) editConnection(name string) {
 		return
 	}
 	existing := *old
+	switch existing.PasswordStorage {
+	case config.PasswordAsk:
+		existing.Password = a.passwords[name]
+	case config.PasswordVault:
+		// The dialog shows the password, and saving it needs the vault.
+		v := a.store.Vault()
+		if !unlockVault(a.win.QWidget, v) {
+			return
+		}
+		existing.Password, _, _ = v.Password(name)
+	}
 	c, ok := connectionDialog(a.win.QWidget, a.store, &existing)
 	if !ok {
 		return
 	}
+	a.rememberPassword(c, name)
 	a.closeInfoTabs(name)
 	a.dropSource(name)
 	a.loadConnections()
@@ -364,13 +385,26 @@ func (a *App) deleteConnection(name string) {
 		qt.QMessageBox_Warning(a.win.QWidget, "Delete Connection", err.Error())
 		return
 	}
+	delete(a.passwords, name)
 	a.closeInfoTabs(name)
 	a.dropSource(name)
 	a.loadConnections()
 	a.setStatus(fmt.Sprintf("Connection %q deleted.", name))
 }
 
+// rememberPassword keeps for the session the password typed in the
+// connection dialog of a connection that never stores it.
+func (a *App) rememberPassword(c config.Connection, oldName string) {
+	delete(a.passwords, oldName)
+	delete(a.passwords, c.Name)
+	if c.PasswordStorage == config.PasswordAsk && c.Password != "" {
+		a.passwords[c.Name] = c.Password
+	}
+}
+
 // disconnect closes every connection to a source; it reconnects on demand.
+// A password asked this session is forgotten, so that a wrong one can be
+// typed again.
 func (a *App) disconnect(name string) {
 	for _, t := range a.sqlTabs {
 		if t.conn == name && !t.busy() {
@@ -381,6 +415,7 @@ func (a *App) disconnect(name string) {
 		}
 	}
 	a.dropSource(name)
+	delete(a.passwords, name)
 	a.tree.collapseConnection(name)
 	a.setStatus(fmt.Sprintf("Disconnected from %q.", name))
 }

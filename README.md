@@ -79,8 +79,11 @@ UCRT runtime.
 
 Stored in the user config directory (`~/.config/dibi` on Linux):
 
-- `connections/` — one YAML file per connection. **Passwords are stored in
-  plaintext** in this version.
+- `connections/` — one YAML file per connection. By default the password is
+  stored there in **plaintext**; each connection can instead never store it
+  (asked once per session) or keep it in the vault.
+- `vault.json` — passwords encrypted with a master password (Argon2id +
+  XChaCha20-Poly1305), see [specs/password_storage.md](specs/password_storage.md).
 - `queries/` — saved queries, one `.sql` file each.
 - `state.yaml` — the last used connection and the theme.
 
@@ -103,7 +106,8 @@ docker run -d --name dibi-mssql -p 1433:1433 -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWO
 
 `make autopilot` builds a variant of the app that drives its own UI through
 the main workflows and saves screenshots (`DIBI_SHOTS=dir`); use it with a
-throwaway `XDG_CONFIG_HOME`.
+throwaway `XDG_CONFIG_HOME`. `DIBI_AUTOPILOT_ONLY=passwords` runs only the
+password storage checks, which need just a `pg` connection.
 
 ### Layout
 

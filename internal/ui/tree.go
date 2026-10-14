@@ -291,6 +291,7 @@ func (t *objectTree) expand(item *qt.QTreeWidgetItem) {
 	}
 	src := t.app.source(e.conn)
 	if src == nil {
+		item.SetExpanded(false) // the password was not given
 		return
 	}
 	t.app.setLastUsed(e.conn, e.node.Database)

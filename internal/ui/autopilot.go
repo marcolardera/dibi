@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"dibi/internal/config"
 	"dibi/internal/export"
 	"dibi/internal/importer"
 
@@ -163,6 +164,7 @@ func runAutopilot(a *App) {
 		p.dir = "."
 	}
 	time.Sleep(time.Second)
+	only := os.Getenv("DIBI_AUTOPILOT_ONLY")
 	defer func() {
 		p.log("\nautopilot finished: %d failure(s)", p.fails)
 		onUIWait(func() {
@@ -173,6 +175,10 @@ func runAutopilot(a *App) {
 		})
 	}()
 
+	if only == "passwords" {
+		p.passwords()
+		return
+	}
 	p.log("== start")
 	p.shot("01-start")
 	p.check(ui(func() int { return a.tree.widget.TopLevelItemCount() }) == len(a.conns), "all connections in the tree")
@@ -601,6 +607,113 @@ func runAutopilot(a *App) {
 	onUIWait(a.export)
 
 	p.importTable()
+	p.passwords()
+}
+
+// answer waits for a modal dialog, fills its line edits with texts, saves a
+// screenshot and presses OK.
+func (p *pilot) answer(shot string, texts ...string) {
+	p.wait("dialog "+shot, func() bool { return qt.QApplication_ActiveModalWidget() != nil })
+	onUIWait(func() {
+		w := qt.QApplication_ActiveModalWidget()
+		i := 0
+		for _, c := range w.Children() {
+			if c.Inherits("QLineEdit") && i < len(texts) {
+				qt.UnsafeNewQLineEdit(c.UnsafePointer()).SetText(texts[i])
+				i++
+			}
+		}
+	})
+	p.shot(shot)
+	onUIWait(func() {
+		for _, c := range qt.QApplication_ActiveModalWidget().Children() {
+			if c.Inherits("QDialogButtonBox") {
+				qt.UnsafeNewQDialogButtonBox(c.UnsafePointer()).Button(qt.QDialogButtonBox__Ok).Click()
+			}
+		}
+	})
+}
+
+// passwords checks the connections that keep their password out of the
+// connection file: asked once per session, or in the vault.
+func (p *pilot) passwords() {
+	a := p.a
+	p.log("== Password storage")
+	base := *ui(func() *config.Connection { return a.connection("pg") })
+	pw := base.Password
+	add := func(name string, storage config.PasswordStorage) {
+		c := base
+		c.Name, c.PasswordStorage = name, storage
+		if err := a.store.SaveConnection(c, ""); err != nil {
+			p.check(false, "save %s: %v", name, err)
+		}
+	}
+	file := func(name string) string {
+		data, _ := os.ReadFile(filepath.Join(a.store.Root, "connections", name+".yaml"))
+		return string(data)
+	}
+
+	// Never store: asked on the first use, kept for the session.
+	add("pg-ask", config.PasswordAsk)
+	onUIWait(a.loadConnections)
+	p.check(!strings.Contains(file("pg-ask"), "password:"), "asked password not in the file")
+	go p.answer("30-ask-password", pw)
+	p.item("pg-ask", "dibi")
+	p.check(ui(func() bool { return a.passwords["pg-ask"] == pw }), "asked password kept for the session")
+	onUIWait(func() { a.disconnect("pg-ask") })
+	p.check(ui(func() bool { _, ok := a.passwords["pg-ask"]; return ok }) == false, "Disconnect forgets the asked password")
+
+	// Cancelling the prompt leaves the connection collapsed.
+	go func() {
+		p.wait("password prompt", func() bool { return qt.QApplication_ActiveModalWidget() != nil })
+		onUIWait(func() { qt.QApplication_ActiveModalWidget().Close() })
+	}()
+	it := p.item("pg-ask")
+	onUIWait(func() { it.SetExpanded(true) })
+	p.check(!ui(it.IsExpanded), "cancelled prompt collapses the connection")
+
+	// Vault: created on first save, then unlocked once per session.
+	v := a.store.Vault()
+	v.Reset()
+	go p.answer("31-create-vault", "master password", "master password")
+	p.check(ui(func() bool { return unlockVault(a.win.QWidget, v) }), "vault created")
+	add("pg-vault", config.PasswordVault)
+	p.check(!strings.Contains(file("pg-vault"), "password:"), "vault password not in the file")
+	v.Lock()
+	onUIWait(a.loadConnections)
+	go func() {
+		p.answer("32-unlock-wrong", "wrong password")
+		time.Sleep(300 * time.Millisecond)
+		p.shot("33-unlock-error")
+		p.answer("34-unlock", "master password")
+	}()
+	p.item("pg-vault", "dibi")
+	p.check(v.Unlocked(), "vault unlocked")
+
+	go func() {
+		time.Sleep(800 * time.Millisecond)
+		p.shot("35-edit-vault-connection")
+		onUIWait(func() { qt.QApplication_ActiveModalWidget().Close() })
+	}()
+	onUIWait(func() { a.editConnection("pg-vault") })
+
+	go func() {
+		p.answer("36-change-master", "master password", "new master password", "new master password")
+		p.wait("confirmation", func() bool { return qt.QApplication_ActiveModalWidget() != nil })
+		onUIWait(func() { qt.QApplication_ActiveModalWidget().Close() })
+	}()
+	onUIWait(func() { changeMasterDialog(a.win.QWidget, v) })
+	v.Lock()
+	p.check(v.Unlock("new master password") == nil, "master password changed")
+	pgpw, _, _ := v.Password("pg-vault")
+	p.check(pgpw == pw, "vault password kept after the change")
+
+	for _, name := range []string{"pg-ask", "pg-vault"} {
+		onUIWait(func() { a.disconnect(name) })
+		a.store.DeleteConnection(name)
+	}
+	v.Reset()
+	onUIWait(a.loadConnections)
 }
 
 // importTable imports CSV files into PostgreSQL through the import runner,

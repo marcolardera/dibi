@@ -44,6 +44,18 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 	user := qt.NewQLineEdit2()
 	password := qt.NewQLineEdit2()
 	password.SetEchoMode(qt.QLineEdit__Password)
+	pwStorage := qt.NewQComboBox2()
+	for _, p := range config.PasswordStorages {
+		pwStorage.AddItem3(p.Label(), qt.NewQVariant14(string(p)))
+	}
+	pwStorage.SetToolTip("Plain text: saved unencrypted in the connection file.\n" +
+		"Never store: asked when connecting, and kept in memory until Dibi is closed.\n" +
+		"Encrypted with master password: saved in a vault encrypted with a master password,\n" +
+		"which Dibi asks once per session.")
+	changeMaster := qt.NewQPushButton3("Change Master Password…")
+	changeMaster.OnClicked(func() { changeMasterDialog(dlg.QWidget, store.Vault()) })
+	storageRow := qt.NewQWidget2()
+	storageRow.SetLayout(hbox(pwStorage.QWidget, changeMaster.QWidget).QLayout)
 	sslMode := qt.NewQComboBox2()
 	sslMode.SetToolTip("Disable: never use TLS.\n" +
 		"Prefer: use TLS if the server supports it, without checking its certificate.\n" +
@@ -86,6 +98,8 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 	form.AddRow(dbLabel.QWidget, database.QWidget)
 	form.AddRow(userLabel.QWidget, user.QWidget)
 	form.AddRow(pwLabel.QWidget, password.QWidget)
+	storageLabel := qt.NewQLabel3("Password storage:")
+	form.AddRow(storageLabel.QWidget, storageRow)
 	sslLabel, rootCertLabel, clientCertLabel, clientKeyLabel, walletLabel :=
 		qt.NewQLabel3("SSL mode:"), qt.NewQLabel3("CA certificate:"), qt.NewQLabel3("Client certificate:"),
 		qt.NewQLabel3("Client key:"), qt.NewQLabel3("Wallet:")
@@ -112,6 +126,19 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 
 	currentType := func() config.Type { return config.Type(typeCombo.CurrentData().ToString()) }
 	currentSSL := func() config.SSLMode { return config.SSLMode(sslMode.CurrentData().ToString()) }
+	currentStorage := func() config.PasswordStorage {
+		return config.PasswordStorage(pwStorage.CurrentData().ToString())
+	}
+	updateStorage := func() {
+		switch currentStorage() {
+		case config.PasswordAsk:
+			password.SetPlaceholderText("not saved: asked when connecting")
+		default:
+			password.SetPlaceholderText("")
+		}
+		changeMaster.SetVisible(currentStorage() == config.PasswordVault && store.Vault().Exists())
+	}
+	pwStorage.OnActivated(func(int) { updateStorage() })
 	// updateSSL shows the TLS fields that apply to the type and SSL mode.
 	updateSSL := func() {
 		t, mode := currentType(), currentSSL()
@@ -140,7 +167,8 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 	}
 	sslMode.OnActivated(func(int) { updateSSL() })
 	serverRows := []*qt.QWidget{hostLabel.QWidget, host.QWidget, portLabel.QWidget, port.QWidget,
-		dbLabel.QWidget, database.QWidget, userLabel.QWidget, user.QWidget, pwLabel.QWidget, password.QWidget}
+		dbLabel.QWidget, database.QWidget, userLabel.QWidget, user.QWidget, pwLabel.QWidget, password.QWidget,
+		storageLabel.QWidget, storageRow}
 	fileRows := []*qt.QWidget{pathLabel.QWidget, pathRow}
 	updateFields := func(resetPort bool) {
 		t := currentType()
@@ -246,6 +274,7 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 			c.Database = strings.TrimSpace(database.Text())
 			c.User = strings.TrimSpace(user.Text())
 			c.Password = password.Text()
+			c.PasswordStorage = currentStorage()
 			c.SSLMode = currentSSL()
 			if c.SSLMode != config.SSLDisable {
 				if c.SSLMode.Verifies() {
@@ -326,6 +355,10 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 				return
 			}
 		}
+		if c.PasswordStorage == config.PasswordVault && !unlockVault(dlg.QWidget, store.Vault()) {
+			showStatus(false, "Unlock the password vault to save the password in it.")
+			return
+		}
 		if err := store.SaveConnection(c, oldName); err != nil {
 			showStatus(false, err.Error())
 			return
@@ -344,6 +377,7 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 		database.SetText(existing.Database)
 		user.SetText(existing.User)
 		password.SetText(existing.Password)
+		pwStorage.SetCurrentIndex(max(pwStorage.FindData(qt.NewQVariant14(string(existing.PasswordStorage))), 0))
 		rootCert.SetText(existing.SSLRootCert)
 		clientCert.SetText(existing.SSLCert)
 		clientKey.SetText(existing.SSLKey)
@@ -357,6 +391,7 @@ func connectionDialog(parent *qt.QWidget, store *config.Store, existing *config.
 		host.SetText("localhost")
 		updateFields(true)
 	}
+	updateStorage()
 	name.SetFocus()
 	dlg.Exec()
 	return result, saved

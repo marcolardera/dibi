@@ -136,12 +136,50 @@ func (t Type) SSLModes() []SSLMode {
 	return []SSLMode{SSLPrefer, SSLDisable, SSLRequire, SSLVerifyCA, SSLVerifyFull}
 }
 
+// PasswordStorage says where the password of a connection is kept.
+type PasswordStorage string
+
+const (
+	PasswordPlain PasswordStorage = ""      // in the connection file, in plaintext
+	PasswordAsk   PasswordStorage = "ask"   // never stored: asked once per session
+	PasswordVault PasswordStorage = "vault" // in the vault, encrypted with the master password
+)
+
+// PasswordStorages lists the password storages, in display order.
+var PasswordStorages = []PasswordStorage{PasswordPlain, PasswordAsk, PasswordVault}
+
+// Label returns the human-readable name of a password storage.
+func (p PasswordStorage) Label() string {
+	switch p {
+	case PasswordPlain:
+		return "Plain text"
+	case PasswordAsk:
+		return "Never store"
+	case PasswordVault:
+		return "Encrypted with master password"
+	}
+	return string(p)
+}
+
+// NeedsPassword reports whether opening the connection needs a password that
+// is not in the connection file. File types and SQL Server with integrated
+// authentication (no user) need none.
+func (c *Connection) NeedsPassword() bool {
+	if c.Type.IsFile() || c.PasswordStorage == PasswordPlain {
+		return false
+	}
+	return c.Type != MSSQL || c.User != ""
+}
+
 // Connection holds the parameters of a saved connection.
 //
 // For Oracle, Database is the service name. For SQL Server, Host may name
 // an instance (host\instance, the port is then ignored) and an empty User
-// means integrated (Windows/Kerberos) authentication. In v1 the password is
-// stored in plaintext.
+// means integrated (Windows/Kerberos) authentication.
+//
+// PasswordStorage says where Password is kept: in this file, nowhere (asked
+// when connecting) or in the Vault. Only in the first case is Password
+// written to the file; otherwise it is empty when the connection is read.
 //
 // SSLMode sets TLS (empty means the type's default). SSLRootCert is a PEM
 // file of trusted CAs, checked instead of the system ones by the verify
@@ -160,6 +198,8 @@ type Connection struct {
 	User     string `yaml:"user,omitempty"`
 	Password string `yaml:"password,omitempty"`
 	Path     string `yaml:"path,omitempty"`
+
+	PasswordStorage PasswordStorage `yaml:"password_storage,omitempty"`
 
 	Separator string `yaml:"separator,omitempty"`
 	Quote     string `yaml:"quote,omitempty"`
@@ -189,6 +229,9 @@ func (c *Connection) Validate() error {
 	}
 	if !validType(c.Type) {
 		return fmt.Errorf("unknown connection type %q", c.Type)
+	}
+	if !slices.Contains(PasswordStorages, c.PasswordStorage) {
+		return fmt.Errorf("unknown password storage %q", c.PasswordStorage)
 	}
 	if c.Type.IsFile() {
 		if c.Path == "" {
@@ -228,7 +271,8 @@ func validType(t Type) bool {
 
 // Store reads and writes configuration files under a root directory.
 type Store struct {
-	Root string
+	Root  string
+	vault *Vault
 }
 
 // Dir returns the default config directory for Dibi.
@@ -324,6 +368,10 @@ func (l legacyConnection) upgrade() Connection {
 
 // SaveConnection writes a connection. If oldName is set and differs from the
 // new name (a rename), the old file is removed. Names must be unique.
+//
+// The password goes where PasswordStorage says: for PasswordVault the vault
+// must be unlocked. A password the connection no longer keeps in the vault
+// is removed from it.
 func (s *Store) SaveConnection(c Connection, oldName string) error {
 	if err := c.Validate(); err != nil {
 		return err
@@ -335,6 +383,18 @@ func (s *Store) SaveConnection(c Connection, oldName string) error {
 			return fmt.Errorf("a connection named %q already exists", c.Name)
 		}
 	}
+	if c.Type.IsFile() {
+		c.PasswordStorage = PasswordPlain
+	}
+	vault := s.Vault()
+	if c.PasswordStorage == PasswordVault {
+		if err := vault.SetPassword(c.Name, c.Password); err != nil {
+			return err
+		}
+	}
+	if c.PasswordStorage != PasswordPlain {
+		c.Password = ""
+	}
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return err
@@ -342,19 +402,29 @@ func (s *Store) SaveConnection(c Connection, oldName string) error {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return err
 	}
+	if oldName != "" && oldName != c.Name {
+		if err := vault.Delete(oldName); err != nil {
+			return err
+		}
+	}
+	if c.PasswordStorage != PasswordVault {
+		if err := vault.Delete(c.Name); err != nil {
+			return err
+		}
+	}
 	if renamed {
 		return s.DeleteConnection(oldName)
 	}
 	return nil
 }
 
-// DeleteConnection removes a saved connection.
+// DeleteConnection removes a saved connection and its password in the vault.
 func (s *Store) DeleteConnection(name string) error {
 	err := os.Remove(filepath.Join(s.connectionsDir(), fileName(name)+".yaml"))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
-	return err
+	return s.Vault().Delete(name)
 }
 
 // Queries returns the names of the saved queries, sorted.
