@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"strings"
 
@@ -347,4 +348,19 @@ func sortBy(cs []Constraint, keys []int) {
 			keys[j], keys[j-1] = keys[j-1], keys[j]
 		}
 	}
+}
+
+// setAutocommit: the driver commits after each statement unless a
+// transaction was begun; it goes back to that when the transaction ends
+// through the driver, but not on a COMMIT or ROLLBACK statement. So
+// beginning a transaction turns autocommit off until it is turned on again
+// by committing one.
+func (oracle) setAutocommit(ctx context.Context, conn *sql.Conn, on bool) error {
+	return conn.Raw(func(dc any) error {
+		tx, err := dc.(*go_ora.Connection).BeginTx(ctx, driver.TxOptions{})
+		if err != nil || !on {
+			return err
+		}
+		return tx.Commit()
+	})
 }

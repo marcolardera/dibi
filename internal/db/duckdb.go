@@ -365,3 +365,31 @@ func FileTableName(path string) string {
 	}
 	return name
 }
+
+// A failed BEGIN aborts the open transaction, so it is checked for first.
+func (duckdb) beginIfIdle(ctx context.Context, conn *sql.Conn) error {
+	if duckdbInTransaction(ctx, conn) {
+		return nil
+	}
+	_, err := conn.ExecContext(ctx, "BEGIN")
+	return err
+}
+
+func (duckdb) commitIfOpen(ctx context.Context, conn *sql.Conn) error {
+	if !duckdbInTransaction(ctx, conn) {
+		return nil
+	}
+	_, err := conn.ExecContext(ctx, "COMMIT")
+	return err
+}
+
+// duckdbInTransaction reports whether a transaction is open: outside one,
+// each query gets a new transaction id. Queries fail in an aborted one.
+func duckdbInTransaction(ctx context.Context, conn *sql.Conn) bool {
+	var a, b int64
+	if conn.QueryRowContext(ctx, "SELECT txid_current()").Scan(&a) != nil ||
+		conn.QueryRowContext(ctx, "SELECT txid_current()").Scan(&b) != nil {
+		return true
+	}
+	return a == b
+}

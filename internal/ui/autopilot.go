@@ -243,6 +243,30 @@ func runAutopilot(a *App) {
 		p.runScript("DELETE FROM dibi_test.orders WHERE id = 11;\nDROP INDEX dibi_test.orders_amount_ix;")
 	}
 
+	p.log("== Autocommit off: changes wait for COMMIT or for autocommit back on")
+	orders := func() string {
+		ct := p.runScript("SELECT count(*) FROM dibi_test.orders;")
+		return ui(func() string {
+			if len(ct.views) == 0 || len(ct.views[0].model.rows) == 0 {
+				return "?"
+			}
+			return fmt.Sprint(ct.views[0].model.rows[0][0])
+		})
+	}
+	n0 := orders()
+	act := ui(func() *sqlTab { return a.newScript("INSERT INTO dibi_test.orders VALUES (12, 2, 3);", "") })
+	p.wait("connection list", func() bool { return act.dbCombo.Count() > 0 })
+	p.check(ui(act.autoBox.IsVisible) && ui(act.autoBox.IsChecked), "autocommit checkbox shown, on by default")
+	onUIWait(func() { act.autoBox.SetChecked(false); a.tabs.SetCurrentWidget(act.widget); a.run() })
+	p.wait("insert", func() bool { return !act.running })
+	p.shot("20-autocommit-off")
+	p.check(orders() == n0, "insert not visible to other sessions before commit (%s)", n0)
+	onUIWait(func() { a.tabs.SetCurrentWidget(act.widget); act.autoBox.SetChecked(true) })
+	p.wait("commit", func() bool { return !act.switching })
+	p.check(strings.Contains(p.messages(act), "committed"), "turning autocommit on commits: %q", p.messages(act))
+	p.check(orders() != n0, "insert visible after commit (%s → %s)", n0, orders())
+	p.runScript("DELETE FROM dibi_test.orders WHERE id = 12;")
+
 	p.log("== Tree filter")
 	p.item("pg", "dibi", "dibi_test", "Tables", "customers") // loads the Tables group
 	shown := func(path ...string) bool {

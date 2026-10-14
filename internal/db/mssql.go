@@ -452,3 +452,14 @@ func (mssqlDialect) indexes(ctx context.Context, db *sql.DB, schema, table strin
 	}
 	return out, err
 }
+
+// setAutocommit uses implicit transactions, which turning off does not
+// commit by itself.
+func (mssqlDialect) setAutocommit(ctx context.Context, conn *sql.Conn, on bool) error {
+	q := "SET IMPLICIT_TRANSACTIONS ON"
+	if on {
+		q = "WHILE @@TRANCOUNT > 0 COMMIT; SET IMPLICIT_TRANSACTIONS OFF"
+	}
+	_, err := conn.ExecContext(ctx, q)
+	return err
+}

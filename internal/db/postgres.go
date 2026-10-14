@@ -240,3 +240,31 @@ func (postgres) indexes(ctx context.Context, db *sql.DB, n Node) ([]Index, error
 	}
 	return out, err
 }
+
+func (postgres) beginIfIdle(ctx context.Context, conn *sql.Conn) error {
+	if postgresTxStatus(conn) != 'I' {
+		return nil
+	}
+	_, err := conn.ExecContext(ctx, "BEGIN")
+	return err
+}
+
+// commitIfOpen also ends a failed transaction (COMMIT then rolls it back).
+func (postgres) commitIfOpen(ctx context.Context, conn *sql.Conn) error {
+	if postgresTxStatus(conn) == 'I' {
+		return nil
+	}
+	_, err := conn.ExecContext(ctx, "COMMIT")
+	return err
+}
+
+// postgresTxStatus returns 'I' (idle), 'T' (in a transaction) or 'E' (in
+// a failed transaction).
+func postgresTxStatus(conn *sql.Conn) byte {
+	var status byte
+	conn.Raw(func(dc any) error {
+		status = dc.(*stdlib.Conn).Conn().PgConn().TxStatus()
+		return nil
+	})
+	return status
+}

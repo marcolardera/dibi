@@ -215,3 +215,21 @@ func (sqlite) indexes(ctx context.Context, db *sql.DB, database, table string) (
 	}
 	return out, err
 }
+
+// beginIfIdle: SQLite reports an open transaction only through the C API,
+// which the driver does not expose; a BEGIN inside one fails harmlessly.
+func (sqlite) beginIfIdle(ctx context.Context, conn *sql.Conn) error {
+	_, err := conn.ExecContext(ctx, "BEGIN")
+	if err != nil && strings.Contains(err.Error(), "within a transaction") {
+		return nil
+	}
+	return err
+}
+
+func (sqlite) commitIfOpen(ctx context.Context, conn *sql.Conn) error {
+	_, err := conn.ExecContext(ctx, "COMMIT")
+	if err != nil && strings.Contains(err.Error(), "no transaction is active") {
+		return nil
+	}
+	return err
+}

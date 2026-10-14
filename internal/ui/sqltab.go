@@ -30,6 +30,7 @@ type sqlTab struct {
 	connCombo *qt.QComboBox
 	dbLabel   *qt.QLabel
 	dbCombo   *qt.QComboBox
+	autoBox   *qt.QCheckBox
 	editor    *codeEditor
 	results   *qt.QTabWidget
 	messages  *qt.QPlainTextEdit
@@ -40,8 +41,10 @@ type sqlTab struct {
 	conn     string // connection name, "" if none
 	database string // database for the session ("" = default)
 
-	running bool
-	cancel  context.CancelFunc
+	autocommit bool // wanted for the session
+	running    bool
+	switching  bool // turning autocommit on in the background
+	cancel     context.CancelFunc
 
 	// Accessed from the run goroutine.
 	mu      sync.Mutex
@@ -51,7 +54,7 @@ type sqlTab struct {
 }
 
 func newSQLTab(app *App, number int, conn, database string) *sqlTab {
-	t := &sqlTab{app: app, number: number, widget: qt.NewQWidget2()}
+	t := &sqlTab{app: app, number: number, widget: qt.NewQWidget2(), autocommit: true}
 	layout := qt.NewQVBoxLayout(t.widget)
 	layout.SetContentsMargins(4, 4, 4, 0)
 
@@ -63,7 +66,12 @@ func newSQLTab(app *App, number int, conn, database string) *sqlTab {
 	t.dbCombo = qt.NewQComboBox2()
 	t.dbCombo.SetMinimumContentsLength(14)
 	t.dbCombo.SetSizeAdjustPolicy(qt.QComboBox__AdjustToContents)
-	bar := hbox(qt.NewQLabel3("Connection:").QWidget, t.connCombo.QWidget, t.dbLabel.QWidget, t.dbCombo.QWidget)
+	t.autoBox = qt.NewQCheckBox3("Autocommit")
+	t.autoBox.SetChecked(true)
+	t.autoBox.SetToolTip("When off, statements run in a transaction that lasts until\n" +
+		"you run COMMIT or ROLLBACK. Turning it back on commits it.")
+	bar := hbox(qt.NewQLabel3("Connection:").QWidget, t.connCombo.QWidget, t.dbLabel.QWidget, t.dbCombo.QWidget,
+		t.autoBox.QWidget)
 	bar.AddStretch()
 	layout.AddLayout(bar.QLayout)
 
@@ -99,6 +107,7 @@ func newSQLTab(app *App, number int, conn, database string) *sqlTab {
 		t.database = t.dbCombo.CurrentText()
 		app.setLastUsed(t.conn, t.database)
 	})
+	t.autoBox.OnToggled(t.setAutocommit)
 	return t
 }
 
@@ -135,6 +144,7 @@ func (t *sqlTab) setConnection(conn, database string) {
 	t.connCombo.SetCurrentIndex(max(t.connCombo.FindData(qt.NewQVariant14(conn)), 0))
 	t.dbCombo.Clear()
 	src := t.app.source(conn)
+	t.autoBox.SetVisible(src != nil && src.ManualCommit())
 	switchable := src != nil && src.SwitchableDatabases()
 	t.dbLabel.SetVisible(switchable)
 	t.dbCombo.SetVisible(switchable)
@@ -173,6 +183,49 @@ func (t *sqlTab) setConnection(conn, database string) {
 		}
 		t.dbCombo.AddItems(names)
 		t.dbCombo.SetCurrentIndex(max(t.dbCombo.FindText(t.database), 0))
+	})
+}
+
+// setAutocommit records the autocommit mode for the session. Turning it on
+// commits the open transaction right away; otherwise the mode is applied
+// on the next run.
+func (t *sqlTab) setAutocommit(on bool) {
+	t.autocommit = on
+	t.mu.Lock()
+	sess := t.session
+	t.mu.Unlock()
+	if !on || sess == nil || sess.Autocommit() || t.busy() {
+		return
+	}
+	// The session must have no open cursor: stop paging the results that
+	// were not read to the end.
+	for _, v := range t.views {
+		if v.pager != nil && !v.pager.Done() {
+			v.close()
+		}
+	}
+	t.switching = true
+	t.app.setStatus("Committing…")
+	t.app.refreshChrome()
+	async(func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		return sess.SetAutocommit(ctx, true)
+	}, func(err error) {
+		t.switching = false
+		if err != nil {
+			appendError(t.messages, "Cannot turn autocommit on: ", err.Error())
+			t.results.SetCurrentWidget(t.messages.QWidget)
+			t.app.setStatus("Commit failed.")
+			t.autocommit = false
+			t.autoBox.BlockSignals(true)
+			t.autoBox.SetChecked(false)
+			t.autoBox.BlockSignals(false)
+		} else {
+			t.messages.AppendPlainText("Autocommit on: the open transaction was committed.")
+			t.app.setStatus("Committed.")
+		}
+		t.app.refreshChrome()
 	})
 }
 
@@ -222,7 +275,7 @@ func (t *sqlTab) clearResults() {
 
 // run executes the selection (or the whole script), statement by statement.
 func (t *sqlTab) run() {
-	if t.running || t.busyPaging() {
+	if t.busy() {
 		return
 	}
 	src := t.app.source(t.conn)
@@ -247,13 +300,14 @@ func (t *sqlTab) run() {
 	t.app.setStatus("Running…")
 	t.app.refreshChrome()
 
-	database := t.database
-	go t.execute(ctx, src, database, text, base, stmts)
+	database, autocommit := t.database, t.autocommit
+	go t.execute(ctx, src, database, autocommit, text, base, stmts)
 }
 
 // execute runs in a goroutine. UI updates go through onUIWait so that
 // results appear in order while the script is running.
-func (t *sqlTab) execute(ctx context.Context, src *db.Source, database, text string, base int, stmts []sqlsplit.Statement) {
+func (t *sqlTab) execute(ctx context.Context, src *db.Source, database string, autocommit bool,
+	text string, base int, stmts []sqlsplit.Statement) {
 	start := time.Now()
 	ok := 0
 	var failed error
@@ -285,6 +339,13 @@ func (t *sqlTab) execute(ctx context.Context, src *db.Source, database, text str
 		failed = err
 		onUIWait(func() { appendError(t.messages, "Cannot connect: ", err.Error()) })
 		return
+	}
+	if src.ManualCommit() {
+		if err := sess.SetAutocommit(ctx, autocommit); err != nil {
+			failed = err
+			onUIWait(func() { appendError(t.messages, "Cannot set autocommit: ", err.Error()) })
+			return
+		}
 	}
 
 	for i, st := range stmts {
@@ -472,7 +533,7 @@ func (t *sqlTab) busyPaging() bool {
 	return false
 }
 
-func (t *sqlTab) busy() bool { return t.running || t.busyPaging() }
+func (t *sqlTab) busy() bool { return t.running || t.switching || t.busyPaging() }
 
 // dispose releases everything; called when the tab is closed.
 func (t *sqlTab) dispose() {

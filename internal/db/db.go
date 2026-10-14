@@ -438,6 +438,8 @@ func (s *Source) Info(ctx context.Context, n Node) (*Info, error) {
 type Session struct {
 	Database string
 	conn     *sql.Conn
+	d        dialect
+	manual   bool // autocommit is off
 
 	// interrupt, if set, stops the running query server-side; the context
 	// passed to the driver is then never cancelled.
@@ -460,6 +462,32 @@ type plainCanceller interface {
 	plainCancel() bool
 }
 
+// autocommitSwitch is implemented by dialects whose sessions turn
+// autocommit off with a session setting (MySQL/MariaDB, SQL Server,
+// Oracle). Turning it back on commits the open transaction.
+type autocommitSwitch interface {
+	setAutocommit(ctx context.Context, conn *sql.Conn, on bool) error
+}
+
+// txStarter is implemented by dialects without such a setting (Postgres,
+// SQLite, DuckDB): with autocommit off, sessions start a transaction before
+// each statement run outside one.
+type txStarter interface {
+	// beginIfIdle starts a transaction unless one is open.
+	beginIfIdle(ctx context.Context, conn *sql.Conn) error
+	// commitIfOpen commits the open transaction, if any.
+	commitIfOpen(ctx context.Context, conn *sql.Conn) error
+}
+
+// ManualCommit reports whether sessions can turn autocommit off.
+func (s *Source) ManualCommit() bool {
+	switch s.d.(type) {
+	case autocommitSwitch, txStarter:
+		return true
+	}
+	return false
+}
+
 // NewSession opens a dedicated connection, bound to database if not empty.
 func (s *Source) NewSession(ctx context.Context, database string) (*Session, error) {
 	pool, err := s.Pool(database)
@@ -470,7 +498,7 @@ func (s *Source) NewSession(ctx context.Context, database string) (*Session, err
 	if err != nil {
 		return nil, err
 	}
-	ss := &Session{Database: database, conn: conn}
+	ss := &Session{Database: database, conn: conn, d: s.d}
 	if database != "" {
 		if err := s.d.useDatabase(ctx, conn, database); err != nil {
 			ss.Close()
@@ -510,6 +538,9 @@ func (ss *Session) driverContext(ctx context.Context) (context.Context, func() b
 func (ss *Session) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	dctx, done := ss.driverContext(ctx)
 	defer done()
+	if err := ss.begin(dctx); err != nil {
+		return nil, err
+	}
 	return ss.conn.QueryContext(dctx, query, args...)
 }
 
@@ -517,7 +548,50 @@ func (ss *Session) QueryContext(ctx context.Context, query string, args ...any) 
 func (ss *Session) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	dctx, done := ss.driverContext(ctx)
 	defer done()
+	if err := ss.begin(dctx); err != nil {
+		return nil, err
+	}
 	return ss.conn.ExecContext(dctx, query, args...)
+}
+
+// begin starts a transaction, if autocommit is off and the database needs
+// it to be started explicitly.
+func (ss *Session) begin(ctx context.Context) error {
+	if ts, ok := ss.d.(txStarter); ok && ss.manual {
+		return ts.beginIfIdle(ctx, ss.conn)
+	}
+	return nil
+}
+
+// Autocommit reports whether each statement is committed on its own.
+func (ss *Session) Autocommit() bool { return !ss.manual }
+
+// SetAutocommit turns autocommit on or off. With autocommit off, the
+// statements run in a transaction that lasts until COMMIT or ROLLBACK;
+// turning it back on commits that transaction. Sessions start with
+// autocommit on.
+func (ss *Session) SetAutocommit(ctx context.Context, on bool) error {
+	if on == !ss.manual {
+		return nil
+	}
+	dctx, done := ss.driverContext(ctx)
+	defer done()
+	var err error
+	switch d := ss.d.(type) {
+	case autocommitSwitch:
+		err = d.setAutocommit(dctx, ss.conn, on)
+	case txStarter:
+		if on {
+			err = d.commitIfOpen(dctx, ss.conn)
+		}
+	default:
+		return errors.ErrUnsupported
+	}
+	if err != nil {
+		return err
+	}
+	ss.manual = !on
+	return nil
 }
 
 // Interrupt stops the query currently running on the session server-side,

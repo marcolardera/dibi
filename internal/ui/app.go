@@ -636,6 +636,9 @@ func (a *App) refreshChrome() {
 	}
 	t := a.currentSQL()
 	a.runAct.SetEnabled(t != nil && !t.busy())
+	if t != nil {
+		t.autoBox.SetEnabled(!t.busy())
+	}
 	a.saveAct.SetEnabled(t != nil)
 	busy := t != nil && t.busy()
 	v := a.currentResult()

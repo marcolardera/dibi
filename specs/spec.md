@@ -188,7 +188,7 @@ If no connection has been used yet in the session, the selector is preset to the
 - **Save** always writes into `dibi/queries/` (asks for a name the first time).
 - **Open** shows a list of the saved queries in `dibi/queries/` only (no arbitrary file dialog).
 - **Stop** cancels the running query on the server (e.g. `pg_cancel_backend`, `KILL QUERY`, Oracle break).
-- Autocommit is on by default. Transaction handling will be refined in a later version.
+- **Autocommit** is a checkbox in the connection bar of each SQL editor tab, on by default. When off, the statements run in a transaction that lasts until the user runs `COMMIT` or `ROLLBACK`; turning it back on commits the open transaction right away (results not read to the end stop paging, as the session must have no open cursor). Closing the tab or switching its connection rolls back an open transaction. MySQL/MariaDB use `SET autocommit`, SQL Server `SET IMPLICIT_TRANSACTIONS`, Oracle the driver's transaction mode; PostgreSQL, SQLite and DuckDB have no such setting, so a `BEGIN` is sent before each statement run outside a transaction. Not offered for CSV/Parquet sources.
 
 ### Result area
 
@@ -276,13 +276,13 @@ In v1, passwords are stored in **plaintext** in the connection YAML file. Moving
 - **File connections** refuse to open a missing file (a mistyped path does not create an empty database).
 - **Theme.** Dibi always uses Qt's Fusion style, which draws everything from the palette and looks the same on Linux, Windows and macOS (the native Windows and macOS styles ignore custom palettes). The light palette is Fusion's own, the dark one is defined by Dibi; the colors Dibi paints itself (syntax, gutter, NULLs, errors) are part of each theme and are updated in place when the theme changes. The window title bar is drawn by the OS and is not themed.
 
-## Out of scope for v1
+## Out of scope for now
 
 - Editing data in the grid
 - SSH tunnels (use `ssh -L` and connect to the local port)
-- Autocomplete
+- Autocomplete (but we already have auto-indent and auto-closing of parenthesis)
 - ER diagrams
 - Generated DDL view
 - OS keychain for credentials
-- Advanced transaction handling (manual commit/rollback)
+- Commit/Rollback buttons (with autocommit off, run `COMMIT` or `ROLLBACK`)
 - Opening `.sql` files from outside `dibi/queries/`

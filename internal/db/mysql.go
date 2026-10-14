@@ -244,3 +244,13 @@ func (mysqlDialect) indexes(ctx context.Context, db *sql.DB, n Node) ([]Index, e
 	}
 	return out, err
 }
+
+// setAutocommit: turning autocommit on commits the open transaction.
+func (mysqlDialect) setAutocommit(ctx context.Context, conn *sql.Conn, on bool) error {
+	q := "SET autocommit = 0"
+	if on {
+		q = "SET autocommit = 1"
+	}
+	_, err := conn.ExecContext(ctx, q)
+	return err
+}

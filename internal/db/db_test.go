@@ -418,6 +418,7 @@ func testSession(t *testing.T, ctx context.Context, src *Source, f fixture) {
 	if f.conn.Type == config.MSSQL {
 		testResultSets(t, ctx, sess)
 	}
+	testAutocommit(t, ctx, sess, strings.Replace(q, "orders", "customers", 1))
 
 	// Cancel a slow query; the session must be usable (or reported dead).
 	slow := map[config.Type]string{
@@ -444,6 +445,42 @@ func testSession(t *testing.T, ctx context.Context, src *Source, f fixture) {
 	if time.Since(start) > 5*time.Second {
 		t.Errorf("cancellation took %v", time.Since(start))
 	}
+}
+
+// testAutocommit checks that with autocommit off changes last until
+// ROLLBACK, and that turning it back on commits them.
+func testAutocommit(t *testing.T, ctx context.Context, sess *Session, count string) {
+	table := strings.TrimPrefix(count, "SELECT count(*) FROM ")
+	exec := func(q string) {
+		t.Helper()
+		if _, err := sess.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	check := func(what string, want int) {
+		t.Helper()
+		var n int
+		if err := queryRowScan(ctx, sess, count, &n); err != nil || n != want {
+			t.Errorf("%s: %d customers, want %d (err %v)", what, n, want, err)
+		}
+	}
+	insert := "INSERT INTO " + table + " (id, name, email) VALUES (3, 'Grace', 'grace@example.com')"
+
+	if err := sess.SetAutocommit(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	exec(insert)
+	check("before rollback", 3)
+	exec("ROLLBACK")
+	check("after rollback", 2)
+
+	exec(insert)
+	if err := sess.SetAutocommit(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	sess.ExecContext(ctx, "ROLLBACK") // nothing to roll back; may fail
+	check("after turning autocommit on", 3)
+	exec("DELETE FROM " + table + " WHERE id = 3")
 }
 
 // testResultSets reads every result set of a batch through pagers; a
