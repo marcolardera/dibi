@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf16"
+
+	qt "github.com/mappu/miqt/qt6"
 )
 
 func TestFindAll(t *testing.T) {
@@ -58,6 +60,28 @@ func TestAutoPair(t *testing.T) {
 		col := len(utf16.Encode([]rune(before)))
 		if got := autoPair(line, col, tt.ch); got != tt.want {
 			t.Errorf("autoPair(%q, %q) = %v, want %v", tt.line, tt.ch, got, tt.want)
+		}
+	}
+}
+
+func TestAltGrText(t *testing.T) {
+	ctrlAlt := qt.ControlModifier | qt.AltModifier
+	tests := []struct {
+		mods qt.KeyboardModifier
+		text string
+		want bool
+	}{
+		{ctrlAlt, "[", true}, // AltGr on Windows
+		{ctrlAlt, "{", true},
+		{qt.AltModifier, "[", true}, // Option on macOS
+		{qt.ControlModifier, "[", false},
+		{qt.ControlModifier, "\x1b", false},
+		{ctrlAlt, "", false},
+		{ctrlAlt, "\b", false},
+	}
+	for _, tt := range tests {
+		if got := altGrText(tt.mods, tt.text); got != tt.want {
+			t.Errorf("altGrText(%v, %q) = %v, want %v", tt.mods, tt.text, got, tt.want)
 		}
 	}
 }

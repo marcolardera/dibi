@@ -164,7 +164,7 @@ func (e *codeEditor) keyPress(super func(*qt.QKeyEvent), ev *qt.QKeyEvent) {
 		return
 	}
 	cur := e.TextCursor()
-	if ev.Modifiers()&^(qt.ShiftModifier|qt.KeypadModifier) != 0 {
+	if mods := ev.Modifiers() &^ (qt.ShiftModifier | qt.KeypadModifier); mods != 0 && !altGrText(mods, ev.Text()) {
 		super(ev)
 		return
 	}
@@ -239,6 +239,16 @@ func (e *codeEditor) keyPress(super func(*qt.QKeyEvent), ev *qt.QKeyEvent) {
 		}
 		super(ev)
 	}
+}
+
+// altGrText reports whether a key pressed with the modifiers mods (other
+// than Shift and Keypad) types text, which is the case when they include
+// Alt and the key gives one printable character: Windows reports AltGr as
+// Ctrl+Alt and macOS reports Option as Alt, and on many layouts, such as
+// the Italian one, they type brackets, braces and other characters.
+func altGrText(mods qt.KeyboardModifier, text string) bool {
+	r := []rune(text)
+	return mods&qt.AltModifier != 0 && len(r) == 1 && unicode.IsPrint(r[0])
 }
 
 // newline replaces the selection, if any, with a line break indented as
