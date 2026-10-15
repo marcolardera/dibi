@@ -60,6 +60,8 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       # Cached in GitHub: Qt is only rebuilt when the Dockerfile changes.
       - uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false # an artifact the release job would download
         with:
           context: build/windows
           tags: dibi-windows-build
