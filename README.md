@@ -37,6 +37,45 @@ of the feature specs.
 - **Native desktop app** for Linux and Windows, built with Qt. On Windows
   it ships as a single executable with nothing else to install.
 
+## Installing
+
+Download the archive for your system from the
+[releases page](https://github.com/marcolardera/dibi/releases).
+
+### Linux
+
+Dibi needs a distribution with glibc 2.38 or later (Ubuntu 24.04, Linux
+Mint 22, Debian 13, Fedora 39 or later, Arch) and the Qt 6.4+ libraries:
+
+```sh
+sudo apt install libqt6widgets6     # Ubuntu, Mint, Debian
+sudo dnf install qt6-qtbase-gui     # Fedora
+sudo pacman -S qt6-base             # Arch
+```
+
+Then extract the archive and run `dibi`:
+
+```sh
+tar -xzf dibi-*-linux-amd64.tar.gz
+./dibi-*-linux-amd64/dibi
+```
+
+To run it as `dibi` from anywhere, copy it into a folder on your `PATH`,
+for example `~/.local/bin`.
+
+### Windows
+
+Windows 10 or later. Extract the zip and run `dibi.exe`; there is nothing
+else to install. The executable is not signed, so the first time Windows
+may show "Windows protected your PC": click **More info**, then **Run
+anyway**.
+
+### Where settings are stored
+
+Connections, saved queries and settings are kept in `~/.config/dibi` on
+Linux and `%APPDATA%\dibi` on Windows (see [Configuration](#configuration)).
+Removing Dibi means deleting its executable and that folder.
+
 ## Building (Linux)
 
 Requirements: Go 1.26+, a C/C++ toolchain and the Qt 6 development files.
